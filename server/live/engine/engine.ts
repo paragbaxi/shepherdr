@@ -21,7 +21,8 @@ import { browserEnv } from '../browser.ts'
 import { hidden, ROUTING_FAILURE, type Agents, type Spec } from '../agents.ts'
 import type { Chats } from '../chats.ts'
 import { HOST, placeId, type Places, type Space } from '../places.ts'
-import { privatePrompt, goLine, handOverLine, restartLine, resumedLine, settingsBlock, prNewsLine, queuedLine, splitBrief, taskFirst, taskPrompt } from '../prompts.ts'
+import { privatePrompt, goLine, handOverLine, modelLimitLine, restartLine, resumedLine, settingsBlock, prNewsLine, queuedLine, splitBrief, taskFirst, taskPrompt } from '../prompts.ts'
+import { findModel, modelsOf } from '../models.ts'
 import { inMins, type Retry } from '../retry.ts'
 import { pastTimes } from '../estimates.ts'
 import { CLI_NAME, kindOf, type Settings } from '../settings.ts'
@@ -333,6 +334,9 @@ const BRIEF_WAIT = 120_000
 
 /** what a task for later (task add --later) is told: its agent reads the brief and waits for a go */
 const LATER = "Don't start yet: wait for a go."
+
+/** the model a CLI runs on, by its id: an alias as its id, none (or default) as the CLI's own default */
+const modelId = (kind: string, m?: string) => findModel(kind, !m || m === 'default' ? modelsOf(kind)?.default : m)?.id ?? m
 
 export class Engine extends Emitter<Events> {
   pilotOwner?: (requester?: string) => string | undefined
@@ -1176,9 +1180,10 @@ export class Engine extends Emitter<Events> {
    * Its agent started again on this CLI, model and effort (the restart sheet, shepherdr restart). Mid-turn it is
    * interrupted first. The same CLI resumes its session; another takes over with the brief, the branch's commits,
    * what lies uncommitted and the chat's last messages. What you sent meanwhile waits for it; its worktree and branch
-   * stay as they are; a card in its chat marks it.
+   * stay as they are; a card in its chat marks it. why: Shepherdr's own reason (its model can't go on, cantGoOn),
+   * told to the agent and on the card instead of the human's restart.
    */
-  async restart(id: string, to: Harness) {
+  async restart(id: string, to: Harness, why?: string) {
     const t = this.req(id)
     if (ended(t)) throw new Error(`${t.id} is Done already (${t.closed ? 'nothing to merge' : 'merged'}): it has no agent to restart.`)
     if (!t.worktree) throw new Error(`${t.id} hasn't started yet: it starts on what its brief says.`)
@@ -1194,7 +1199,7 @@ export class Engine extends Emitter<Events> {
       // what it is told, read once its turn has stopped: what it did meanwhile counts
       const first = async () => {
         await this.agents.stopTurn(key)
-        if (from === h.kind) return hidden(resumedLine(words), 'restart')
+        if (from === h.kind) return hidden(why ? modelLimitLine(words, why) : resumedLine(words), 'restart')
         return hidden(`${taskFirst(t)}\n\n${restartLine({ from: name(from), to: words, ...(await this.soFar(t, key, name(from))) })}`, 'restart')
       }
       await this.launch(t, undefined, undefined, { ...h, model: h.model ?? '', effort: h.effort ?? '' }, first)
@@ -1203,7 +1208,7 @@ export class Engine extends Emitter<Events> {
       t.paused = undefined
       t.agent = h
       const card = `restart:${t.id}:${Date.now()}`
-      this.chats.post(key, { id: card, card: { id: card, restart: true, text: `Restarted on ${words}` } })
+      this.chats.post(key, { id: card, card: { id: card, restart: true, text: why ? `On ${words} now: ${why}` : `Restarted on ${words}` } })
     } finally {
       this.handing.delete(t.id)
       this.save()
@@ -1232,15 +1237,35 @@ export class Engine extends Emitter<Events> {
   /**
    * Its agent can't go on (retry.ts): out of allowance, signed out, or its provider still down after the last try. The
    * backup agent (Settings' task.fallback) takes over once, in the same worktree and branch, with the brief and what
-   * was done so far; else, or when that one can't go on either, it waits for you.
+   * was done so far; else, or when that one can't go on either, it waits for you. A backup on the agent's own CLI
+   * takes over only where its model alone is out (modelOnly: Fable's limit), and only on another model (Backup's): its
+   * session resumes there, as /model would, and it is told why (restart).
    */
-  async cantGoOn(id: string, why: string) {
+  async cantGoOn(id: string, why: string, modelOnly = false) {
     const t = this.task(id)
     if (!t || t.pilot || !this.mayRetry(this.key(t)) || this.handing.has(t.id)) return
     const key = this.key(t)
     const from = this.agents.record(key)?.kind ?? t.agent?.kind ?? ''
     const to = kindOf(this.settings.get('task.fallback', this.nameOf(t)))
-    if (!to || to === from || t.tookOver || !t.worktree || !this.installed(to)) return this.settle(t)
+    if (!to || t.tookOver || !t.worktree || !this.installed(to)) return this.settle(t)
+    // Settings' Backup model and effort (its project's), or else the task's own effort, as near as the backup's
+    // model takes it
+    const own = this.settings.modelOf('backup', to, this.nameOf(t))
+    const effort = own.effort ?? (t.agent ?? this.settings.harness('task', this.nameOf(t))).effort
+    if (to === from) {
+      if (!modelOnly || !own.model || modelId(to, own.model) === modelId(from, this.agents.record(key)?.model ?? t.agent?.model)) return this.settle(t)
+      // the model's name stays as the provider wrote it: "Fable limit reached"
+      t.tookOver = { from, to, why, at: Date.now() }
+      try {
+        await this.restart(t.id, { kind: to, model: own.model, ...(effort ? { effort } : {}) }, why)
+      } catch (e) {
+        // it didn't start again: it went wrong, and a later hand-over may try again
+        t.trouble = troubleOf(e)
+        t.tookOver = undefined
+        this.settle(t)
+      }
+      return
+    }
     const name = (k: string) => CLI_NAME[k] ?? k
     this.handing.add(t.id)
     t.tookOver = { from, to, why: why.charAt(0).toLowerCase() + why.slice(1), at: Date.now() }
@@ -1248,10 +1273,7 @@ export class Engine extends Emitter<Events> {
     try {
       const first = `${taskFirst(t)}\n\n${handOverLine({ from: name(from), why: t.tookOver.why, ...(await this.soFar(t, key, name(from))) })}`
       await this.agents.finish(key)
-      // Settings' Backup model and effort (its project's), or else the task's own effort, as near as the backup's
-      // model takes it
-      const own = this.settings.modelOf('backup', to, this.nameOf(t))
-      await this.launch(t, first, undefined, { kind: to, model: own.model, effort: own.effort ?? (t.agent ?? this.settings.harness('task', this.nameOf(t))).effort })
+      await this.launch(t, first, undefined, { kind: to, model: own.model, effort })
       const card = `takeover:${t.id}:${t.tookOver.at}`
       this.chats.post(key, { id: card, card: { id: card, text: `${name(to)} took over from ${name(from)}: ${t.tookOver.why}` } })
     } catch (e) {

@@ -273,7 +273,7 @@ export class ClaudeReader implements Reader {
         if (m.stop_reason === 'end_turn' && texts.length) turnEnd(`turn-${id}`, t)
         // the API failed for good (Claude Code retried it already): the turn is over
         if (l.isApiErrorMessage) {
-          out.push({ kind: 'error', id: `error-${l.uuid ?? id}`, at: t, text: texts.join('\n'), code: typeof l.error === 'string' ? l.error : undefined, status: typeof l.apiErrorStatus === 'number' ? l.apiErrorStatus : undefined })
+          out.push({ kind: 'error', id: `error-${l.uuid ?? id}`, at: t, text: texts.join('\n'), code: typeof l.error === 'string' ? l.error : undefined, status: typeof l.apiErrorStatus === 'number' ? l.apiErrorStatus : undefined, detail: typeof l.apiError === 'string' ? l.apiError : undefined })
           turnEnd(`turn-${id}`, t)
         }
       } else if (l.type === 'system' && l.subtype === 'turn_duration') {

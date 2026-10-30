@@ -2,8 +2,9 @@
 // (overloaded, at capacity, a rate limit, a dropped connection, a server error) are waited out: the agent is told to
 // carry on after 1, 2, 4 and 8 minutes, so five tries over fifteen minutes, and only then does the human hear. Errors
 // waiting can't fix (signed out, out of allowance, a model that isn't there, anything not recognised) go to the human
-// at once, or to a task's backup agent (engine.ts handOver). Each CLI's log records the error (readers/), and this
-// decides what it means. From herdr-projects' docs/provider-errors.md, without the weight.
+// at once, or to a task's backup agent (engine.ts cantGoOn). A limit of its model alone (Claude Code's "You've reached
+// your Fable limit") is one of them, and there another model of the same CLI can go on. Each CLI's log records the
+// error (readers/), and this decides what it means. From herdr-projects' docs/provider-errors.md, without the weight.
 import { readJson, writeJson } from '../store.ts'
 import { hidden } from './agents.ts'
 
@@ -14,6 +15,8 @@ export interface Cut {
   text: string
   code?: string
   status?: number
+  /** the CLI's finer code where it has one: Claude Code's apiError (model_requires_usage_credits) */
+  detail?: string
 }
 
 export interface ProviderError {
@@ -21,6 +24,8 @@ export interface ProviderError {
   passing: boolean
   /** in a few words, for a status line: "Provider overloaded", "Out of allowance" */
   reason: string
+  /** only its model is out (that model's own limit): another model of the same CLI goes on */
+  model?: true
 }
 
 const CODE_PASSING: Record<string, string> = {
@@ -37,7 +42,10 @@ const CODE_PASSING: Record<string, string> = {
 }
 const CODE_LASTING = ['unauthorized', 'bad_request', 'context_window_exceeded', 'usage_limit_exceeded', 'sandbox_error', 'authentication_failed', 'billing_error', 'invalid_request', 'model_not_found', 'max_output_tokens']
 const WORDS_AUTH = /\b(?:status|error|HTTP)\b[^\n]{0,12}\b40[13]\b|\b401 Unauthorized\b|please run \/login|login expired|not logged in|oauth token/i
-const WORDS_ALLOWANCE = /usage limit|(?<!rate.?)limit reached|hit your [\w ]*limit|\bquota\b|billing|credit balance|payment/i
+const WORDS_ALLOWANCE = /usage limit|(?<!rate.?)limit reached|(?:hit|reached) your [\w .-]*(?<!rate.?)limit|\bquota\b|billing|credit balance|payment/i
+/** a limit of the model alone, by the CLI's finer code: Claude Code's for a model past its share of the plan, whose
+ *  log calls it a 429 rate_limit and says "You've reached your Fable limit. … switch models with /model." */
+const DETAIL_MODEL_LIMIT = ['model_requires_usage_credits']
 const WORDS_LASTING = /not supported|unsupported|does not exist|may not exist|not found|unknown (?:provider|model)|invalid|context (?:window|length)|flagged|content policy/i
 const WORDS_PASSING: [RegExp, string][] = [
   [/at capacity/i, 'Model at capacity'],
@@ -54,12 +62,19 @@ const until = (words: string) => {
   return when ? ` until ${when}` : ''
 }
 
+/** a model's own limit in a few words, by the name the provider gives it: "Fable limit reached" */
+const modelLimit = (words: string) => {
+  const m = words.match(/\breached your ([\w.-]+(?: [\w.-]+)?) limit\b/i)
+  return `${m ? m[1].charAt(0).toUpperCase() + m[1].slice(1) : 'Model'} limit reached${until(words)}`
+}
+
 /** which errors pass by themselves. The CLI's own code decides where it has one (Codex codex_error_info, Claude Code's
- *  error and HTTP status); its words decide for the rest. Not recognised: it doesn't pass. */
-export function providerError(words: string, code = '', status = 0): ProviderError {
+ *  error, apiError and HTTP status); its words decide for the rest. Not recognised: it doesn't pass. */
+export function providerError(words: string, code = '', status = 0, detail = ''): ProviderError {
   const c = code.toLowerCase()
   const said = WORDS_PASSING.find(([re]) => re.test(words))?.[1]
   if (c === 'unauthorized' || c === 'authentication_failed' || status === 401 || status === 403 || WORDS_AUTH.test(words)) return { passing: false, reason: 'Signed out' }
+  if (DETAIL_MODEL_LIMIT.includes(detail.toLowerCase())) return { passing: false, reason: modelLimit(words), model: true }
   if (c === 'usage_limit_exceeded' || c === 'billing_error' || WORDS_ALLOWANCE.test(words)) return { passing: false, reason: `Out of allowance${until(words)}` }
   if (CODE_LASTING.includes(c) || (status >= 400 && status < 500 && status !== 408 && status !== 429) || WORDS_LASTING.test(words)) return { passing: false, reason: c === 'context_window_exceeded' || /context (?:window|length)|too long/i.test(words) ? 'Context window full' : c === 'model_not_found' || /model/i.test(words) ? 'Model not available' : 'Provider refused it' }
   if (CODE_PASSING[c]) return { passing: true, reason: said ?? CODE_PASSING[c] }
@@ -85,6 +100,8 @@ export interface Retry {
   nudged?: number
   /** given up: what waiting can't fix, or still cut off after the last try. The human (or a backup agent) is next */
   over?: boolean
+  /** only its model was out (ProviderError.model): another model of the same CLI can go on */
+  model?: true
 }
 
 /** the line a cut-off agent is told after the wait */
@@ -126,7 +143,7 @@ export class Retries {
     // itself): it went on without being told, and the count starts again
     if (!cut) return was ? this.clear(key) : undefined
     if (was?.cut === cut.id) return
-    const e = providerError(cut.text, cut.code, cut.status)
+    const e = providerError(cut.text, cut.code, cut.status, cut.detail)
     const tries = (was?.tries ?? 0) + 1
     const words = cut.text.replace(/\s+/g, ' ').trim().slice(0, 300)
     if (e.passing && tries <= this.waits.length) {
@@ -136,7 +153,7 @@ export class Retries {
       this.hooks.changed(key)
       return
     }
-    const r: Retry = { cut: cut.id, tries, reason: e.passing ? `${e.reason}, still after ${tries} tries` : e.reason, words, over: true }
+    const r: Retry = { cut: cut.id, tries, reason: e.passing ? `${e.reason}, still after ${tries} tries` : e.reason, words, over: true, ...(e.model ? { model: e.model } : {}) }
     this.set(key, r)
     // told by what comes next: a backup agent takes over, or the human hears
     this.hooks.over(key, r)

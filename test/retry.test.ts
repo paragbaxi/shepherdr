@@ -21,7 +21,7 @@ const ending = (name: string) => {
   if (e?.kind !== 'error') throw new Error(`${name}: no error read`)
   // the turn is over with it
   expect(ev.findLastIndex((x) => x.kind === 'turn-end')).toBeGreaterThan(ev.indexOf(e))
-  return providerError(e.text, e.code, e.status)
+  return providerError(e.text, e.code, e.status, e.detail)
 }
 
 describe("each CLI's log says what cut its turn off", () => {
@@ -36,6 +36,11 @@ describe("each CLI's log says what cut its turn off", () => {
 
   test('errors waiting cannot fix go on at once, in a few words', () => {
     expect(ending('claude-usage-limit-made')).toEqual({ passing: false, reason: 'Out of allowance until 5pm' })
+    // a model past its share of the plan: Claude Code logs a 429 rate_limit, but waiting won't fix it, and another
+    // model of the same CLI goes on
+    expect(ending('claude-fable-limit-made')).toEqual({ passing: false, reason: 'Fable limit reached', model: true })
+    // its words alone: no wait, but nothing says another model goes on
+    expect(providerError("You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.", 'rate_limit', 429)).toEqual({ passing: false, reason: 'Out of allowance' })
     expect(ending('claude-model-not-found')).toEqual({ passing: false, reason: 'Model not available' })
     expect(ending('codex-unauthorized')).toEqual({ passing: false, reason: 'Signed out' })
     expect(ending('codex-model-not-supported')).toEqual({ passing: false, reason: 'Model not available' })
@@ -45,6 +50,8 @@ describe("each CLI's log says what cut its turn off", () => {
     expect(providerError('Login expired · Please run /login', 'authentication_failed')).toEqual({ passing: false, reason: 'Signed out' })
     // anything not recognised is not waited out
     expect(providerError('Something odd happened')).toEqual({ passing: false, reason: 'Provider error' })
+    // a rate limit reached is still waited out
+    expect(providerError("You've reached your rate limit. Try again in a minute.", 'rate_limit', 429)).toEqual({ passing: true, reason: 'Rate limited' })
   })
 })
 
@@ -60,6 +67,15 @@ describe('waits and tries', () => {
   const until = async (f: () => boolean) => {
     for (const t0 = Date.now(); !f(); await Bun.sleep(5)) if (Date.now() - t0 > 8000) throw new Error('timed out')
   }
+
+  test("a model's own limit is not waited out: it gives up at once, saying another model can go on", () => {
+    const w = world()
+    w.r.seen('A', { id: 'f1', at: Date.now(), text: "You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.", code: 'rate_limit', status: 429, detail: 'model_requires_usage_credits' })
+    expect(w.over).toEqual([{ key: 'A', reason: 'Fable limit reached' }])
+    expect(w.r.get('A')).toMatchObject({ tries: 1, over: true, model: true })
+    expect(w.r.get('A')!.due).toBeUndefined()
+    expect(w.nudged).toEqual([])
+  })
 
   test('told to carry on after each wait; still cut off after the last try, it gives up', async () => {
     const w = world()

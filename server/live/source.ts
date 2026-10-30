@@ -1320,7 +1320,7 @@ export class LiveSource extends Emitter<SourceEvents> implements Source {
   /** an agent can't go on by itself: a task's backup agent takes over, or it waits for you; a coordinator tells you in
    *  its chat, with an alert */
   private cannotGoOn(key: string, r: Retry) {
-    if (key.includes('/')) return void this.engine.cantGoOn(key.split('/')[0], r.reason).catch(() => undefined)
+    if (key.includes('/')) return void this.engine.cantGoOn(key.split('/')[0], r.reason, !!r.model).catch(() => undefined)
     const id = `cut:${r.cut}`
     this.chats.post(key, { id, card: { id, text: `Cut off by its provider: ${r.reason.charAt(0).toLowerCase()}${r.reason.slice(1)}. Write to carry on.` } })
     if (this.watched.includes(key)) this.emit('chat', key)

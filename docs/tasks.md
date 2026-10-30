@@ -48,13 +48,17 @@
   for you: Shepherdr waits and tells the agent, task or coordinator, to carry on, after 1, 2, 4 and 8 minutes. Meanwhile
   a task stays Working, its line saying why and when (`Provider overloaded · retry in 2m`). Only when the fifth try is
   cut off too does it need you (`Provider overloaded, still after 5 tries`); a coordinator says so in its chat, with an
-  alert. Errors waiting can't fix (signed out, out of allowance, a model that isn't there) go to you at once. Anything
-  written to the agent starts the count again. Each CLI's log says what cut it off (`server/live/retry.ts` decides).
+  alert. Errors waiting can't fix (signed out, out of allowance, a model's own limit, a model that isn't there) go to
+  you at once, or to the backup agent below. Anything written to the agent starts the count again. Each CLI's log says
+  what cut it off (`server/live/retry.ts` decides).
 - When a task's agent can't go on (out of allowance, signed out, its provider still down after the tries), its
   **backup agent** takes over, once: Settings → Agents → Tasks → Backup (`task.fallback`, Codex unless set, or off).
   It starts in the same worktree and branch, on its CLI's own model, with the brief and a short handover: who it takes
   over from and why, the branch's commits, what lies uncommitted and the chat so far. A card in the task's chat says
-  so. If the backup can't go on either, or isn't installed, the task needs you.
+  so. If the backup can't go on either, or isn't installed, the task needs you. A backup on the agent's own CLI (Claude
+  Code, Model `claude-opus-5-5`, Effort max) takes over only when the agent's model alone is out (Claude Code's
+  "You've reached your Fable limit"): the agent starts again on Backup's model and effort with its session as it was,
+  as `/model` would, and is told why; a card says `On Claude Code (Opus 5.5, max) now: Fable limit reached`.
 - Status, coordinators' too, is what the agent reports of itself. Every Claude Code Shepherdr starts gets a settings
   file of its own (`--settings`, in `~/.shepherdr/hooks/`; your own settings are never touched) whose hooks record
   each event: a turn starts or ends, what still runs in the background as it ends, a permission prompt (a subagent's

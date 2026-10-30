@@ -603,7 +603,7 @@ export class Chats {
     const ev = this.events.get(key) ?? []
     const e = ev.findLast((e) => e.kind === 'error' || e.kind === 'turn-start' || e.kind === 'user')
     if (e?.kind !== 'error' || e.at < (this.agents.record(key)?.started ?? 0)) return undefined
-    return { id: e.id, at: e.at, text: e.text, code: e.code, status: e.status }
+    return { id: e.id, at: e.at, text: e.text, code: e.code, status: e.status, detail: e.detail }
   }
 
   /** its log shows a turn that ended after this time */

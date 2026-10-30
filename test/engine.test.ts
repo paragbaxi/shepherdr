@@ -586,6 +586,71 @@ describe('a turn the provider cut off', () => {
     expect(w.started.filter((x) => x.key === key)).toHaveLength(2)
     expect(w.engine.view(t)).toMatchObject({ status: 'need', sub: 'Signed out' })
   })
+  /** a task whose agent started on this model of Claude Code */
+  const startedOn = async (w: ReturnType<typeof world>, name: string, model: string) => {
+    const p = await w.places.add(repo(), name)
+    const t = w.engine.add({ project: p.name, title: 'Say hello', desc: 'Add hello.txt. Merge when done.', by: 'test', agent: { kind: 'claude', model } })
+    const key = `${t.id}/Agent`
+    await until(() => w.started.some((s) => s.key === key))
+    return { t, key }
+  }
+
+  test("its model's own limit: a backup on the same CLI goes on at once on Backup's model, its session resumed", async () => {
+    const w = world()
+    cutOff(w)
+    w.engine.installed = () => true
+    w.settings.set('task.fallback', 'Claude Code')
+    w.settings.set('backup.model', 'claude-opus-5-5')
+    w.settings.set('backup.effort', 'max')
+    const { t, key } = await startedOn(w, 'retry-model-limit', 'claude-fable-5-1')
+    w.agentIs(key, 'idle')
+    await w.engine.cantGoOn(t.id, 'Fable limit reached', true)
+    const s = w.started.filter((x) => x.key === key)
+    expect(s).toHaveLength(2)
+    expect(s[1]).toMatchObject({ kind: 'claude', model: 'claude-opus-5-5', effort: 'max', cwd: t.worktree })
+    // a hidden line saying why, not the brief again
+    expect(s[1].first).toStartWith('<shepherdr><restart>')
+    expect(s[1].first).toContain("Your model can't go on (Fable limit reached), so Shepherdr restarted you on Claude Code (Opus 5.5, max), with your session as it was.")
+    expect(t.agent).toEqual({ kind: 'claude', model: 'claude-opus-5-5', effort: 'max' })
+    expect(t.tookOver).toMatchObject({ from: 'claude', to: 'claude', why: 'Fable limit reached' })
+    expect(w.posted.find((p) => p.key === key && p.id.startsWith('restart:'))?.card).toMatchObject({ restart: true, text: 'On Claude Code (Opus 5.5, max) now: Fable limit reached' })
+    // once: cut off on Opus as well, it waits for you
+    w.agentIs(key, 'idle')
+    w.engine.retry = () => ({ cut: 'e9', tries: 1, reason: 'Out of allowance until 5pm', words: 'limit', over: true })
+    await w.engine.cantGoOn(t.id, 'Out of allowance until 5pm')
+    expect(w.started.filter((x) => x.key === key)).toHaveLength(2)
+    expect(w.engine.view(t)).toMatchObject({ status: 'need', sub: 'Out of allowance until 5pm' })
+    for (const k of ['task.fallback', 'backup.model', 'backup.effort']) w.settings.set(k, null)
+  })
+
+  test('a backup on the same CLI leaves what another model of it would not fix, or a model it runs on already', async () => {
+    const w = world()
+    cutOff(w)
+    w.engine.installed = () => true
+    w.settings.set('task.fallback', 'Claude Code')
+    w.settings.set('backup.model', 'claude-opus-5-5')
+    const fable = await startedOn(w, 'retry-same-cli', 'claude-fable-5-1')
+    w.agentIs(fable.key, 'idle')
+    w.engine.retry = () => ({ cut: 'e1', tries: 1, reason: 'Out of allowance until 5pm', words: 'limit', over: true })
+    // the whole allowance, not its model's: another model of the same CLI would not go on either
+    await w.engine.cantGoOn(fable.t.id, 'Out of allowance until 5pm')
+    expect(w.started.filter((x) => x.key === fable.key)).toHaveLength(1)
+    expect(w.engine.view(fable.t)).toMatchObject({ status: 'need', sub: 'Out of allowance until 5pm' })
+    // Opus's own limit, with Backup on Opus: nowhere else to go (its default model is Opus too)
+    for (const model of ['claude-opus-5-5', 'default']) {
+      const opus = await startedOn(w, `retry-same-model-${model}`, model)
+      w.agentIs(opus.key, 'idle')
+      await w.engine.cantGoOn(opus.t.id, 'Opus limit reached', true)
+      expect(w.started.filter((x) => x.key === opus.key)).toHaveLength(1)
+      expect(opus.t.tookOver).toBeUndefined()
+    }
+    // no Backup model: nothing to go on to
+    w.settings.set('backup.model', null)
+    w.engine.retry = () => ({ cut: 'e2', tries: 1, reason: 'Fable limit reached', words: 'limit', over: true, model: true })
+    await w.engine.cantGoOn(fable.t.id, 'Fable limit reached', true)
+    expect(w.started.filter((x) => x.key === fable.key)).toHaveLength(1)
+    w.settings.set('task.fallback', null)
+  })
 })
 
 describe('restarting a task agent', () => {

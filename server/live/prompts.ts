@@ -180,6 +180,12 @@ export function resumedLine(on: string) {
   return `The human restarted you on ${on}, with your session as it was. If you were in the middle of something, carry on where you left off; else reply with only <no-reply>restarted</no-reply>.`
 }
 
+/** what a task's agent is told when Shepherdr starts it again on another model of its CLI, its session as it was,
+ *  because its own model can't go on (engine.ts cantGoOn) */
+export function modelLimitLine(on: string, why: string) {
+  return `Your model can't go on (${why}), so Shepherdr restarted you on ${on}, with your session as it was. Carry on where you left off.`
+}
+
 /** what a task queued after others is told: with its brief (start), when queued while it runs (later), or when what
  *  it waits for changed */
 export function queuedLine(ids: string[], when: 'start' | 'later' | 'changed', id = '<id>') {
