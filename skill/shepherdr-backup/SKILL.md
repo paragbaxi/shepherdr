@@ -24,7 +24,8 @@ The human reads a chat, never your terminal, and decides. Use the `shepherdr` co
     shepherdr review <id>                                                       # then end your turn and wait
     shepherdr ready <id> --summary "<what the human now sees or can do>" --facts "<facts>"
     shepherdr merge <id>
-    shepherdr secret list | shepherdr secret ask NAME --why "<why>"
+    shepherdr secret list
+    shepherdr secret ask NAME --why "<why>"
 
 `shepherdr help` lists the rest. Run each one on its own, words in double quotes with no `$`, backtick or line break,
 nothing chained to it.
@@ -36,7 +37,7 @@ reply is `<no-reply>short reason</no-reply>`.
 ## What you may do
 
 - Your commands start in this worktree, in a sandbox with no network: they write only here, in temp folders, in your
-  own notes and where `git add` and `git commit` need. Don't try to get around it. Push with `shepherdr pr`, never
+  own conversation folder and where `git add` and `git commit` need. Don't try to get around it. Push with `shepherdr pr`, never
   `git push`.
 - If a command really needs to leave the sandbox, run it again with `BypassSandbox` set to true: the human gets a card
   and decides. A denial is final: don't try another way.

@@ -131,6 +131,8 @@ export function outputFromLine(raw: string, id: string): string | undefined {
   } catch {
     return undefined
   }
+  // Antigravity: a tool result is a line of its own
+  if (typeof l?.step_index === 'number' && typeof l?.type === 'string') return String(l.content ?? l.error ?? '')
   // Standalone headless Codex capture: the documented native item, not terminal bytes.
   if (l?.event?.type === 'item.completed' && l.event.item?.type === 'command_execution') return String(l.event.item.aggregated_output ?? '')
   // Claude Code: the result of that tool call

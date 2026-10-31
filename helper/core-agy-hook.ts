@@ -1,19 +1,16 @@
 #!/usr/bin/env bun
 // Per-launch Antigravity hooks: the same record and the same permission card as core-hook.ts, in its CLI's own terms.
 // Antigravity's hooks answer on stdout with a JSON object, always; a failed permission request always denies.
-import { appendFileSync, existsSync, realpathSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { appendFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { readCredential } from '../server/core/home.ts'
 import { coreRequest } from '../server/core/request.ts'
 import type { CoreEndpoint } from '../server/core/client.ts'
 import type { MailCredential } from '../server/core/envelope.ts'
 import type { AgentHook } from '../server/core/model.ts'
-import { agyToolCheck } from './core-agy-policy.ts'
+import { agyRealPath, agyToolCheck } from './core-agy-policy.ts'
 
 const NATIVE = process.argv[2] ?? '', WORKTREE = process.argv[3] ?? ''
-/** Where a path really leads, for what exists of it. */
-const real = (path: string): string => { try { return existsSync(path) ? realpathSync(path) : dirname(path) === path ? path : join(real(dirname(path)), basename(path)) } catch { return path } }
 /** Shepherdr's own names for what each hook means; other hooks say nothing it needs. */
 const EVENTS: Record<string, string> = { SessionStart: 'SessionStart', PreInvocation: 'UserPromptSubmit', PreToolUse: 'PreToolUse', Stop: 'Stop' }
 const CHECKED = NATIVE === 'PreToolUse'
@@ -35,7 +32,7 @@ try {
   if (CHECKED) {
     // Its own plans and notes go in its own conversation folder, which is no one else's to read.
     const own = typeof input.artifactDirectoryPath === 'string' ? [input.artifactDirectoryPath] : []
-    const check = agyToolCheck(input.toolCall ?? {}, { folders: [WORKTREE, ...own], command, hooks: JSON.parse(process.argv[4] || '[]'), real })
+    const check = agyToolCheck(input.toolCall ?? {}, { folders: [WORKTREE, ...own], command, hooks: JSON.parse(process.argv[4] || '[]'), real: path => agyRealPath(path) })
     // Its commands start in its first workspace folder, which is meant to sort as the worktree: this holds if it doesn't.
     const elsewhere = input.toolCall?.name === 'run_command' && !input.toolCall?.args?.Cwd && input.workspacePaths?.[0] !== WORKTREE ? { Cwd: WORKTREE } : {}
     // No decision reads as a denial here, so what its sandbox and edit mode already hold is said out loud too.

@@ -391,3 +391,37 @@ test('an approved Antigravity command answers its own prompt once, and only that
   f.source.agyApprovals.approved(f.agent, { CommandLine: 'git push origin main' }, 3000)
   expect(f.source.store.all('agy-approved')).toEqual([])
 }))
+
+test('a message that arrives during the check, or a differently-cased settings folder, keeps the task where it is', () => fixture(async f => {
+  await onAntigravity(f)
+  const run = handOver(f)
+  await f.source.tasks.providerFallback(f.task.id, f.agent.launch, 'Out of allowance')
+  const at = f.source.tasks.get(f.task.id)!.providerTakeover!.at
+  f.turn({ complete: true })
+  f.source.providerLogin.available = async () => { f.turn({ complete: false }); return true }
+  await f.source.providerReturns.tick(at + 6 * 60_000)
+  expect(run.launches).toHaveLength(1)
+
+  f.turn({ complete: true })
+  f.source.providerLogin.available = async () => true
+  const listing = f.source.files.exec
+  f.source.files.exec = (async (machine: string, argv: string[], ...rest: never[]) => argv[0] === 'ls' ? Buffer.from('README.md\n.CLAUDE\n') : listing(machine, argv, ...rest)) as typeof f.source.files.exec
+  await f.source.providerReturns.tick(at + 7 * 60_000)
+  expect(run.launches).toHaveLength(1)
+  expect(f.source.tasks.get(f.task.id)?.startError).toContain('.CLAUDE')
+  expect(cards(f).at(-1)).toContain('.CLAUDE')
+}))
+
+test('a Ready task goes back too, and stays Ready', () => fixture(async f => {
+  await onAntigravity(f)
+  const run = handOver(f)
+  await f.source.tasks.providerFallback(f.task.id, f.agent.launch, 'Out of allowance')
+  const saved = f.source.tasks.get(f.task.id)!
+  saved.workflow = 'ready'; f.source.store.set('task', saved.id, saved)
+  f.turn({ complete: true })
+  f.source.providerLogin.available = async () => true
+  await f.source.providerReturns.tick(saved.providerTakeover!.at + 6 * 60_000)
+  expect(run.launches[1]).toMatchObject({ kind: 'claude' })
+  expect(run.launches[1].prompt).toContain('already Ready')
+  expect(f.source.tasks.get(f.task.id)).toMatchObject({ kind: 'claude', workflow: 'ready' })
+}))

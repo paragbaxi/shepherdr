@@ -1,7 +1,8 @@
 // What happens to one Antigravity tool call in a task's session. Pure, so it can be tested without a CLI.
 // `pass` lets through what its terminal sandbox already holds (ordinary commands) or what stays in its workspace. Anything
 // that would make it prompt on a screen the human never sees becomes a card in the chat instead: never an auto-approval.
-import { isAbsolute, relative, resolve } from 'node:path'
+import { existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 export type AgyCheck =
   | { action: 'pass' }
@@ -70,6 +71,17 @@ export function agyHookFolders(worktree: string, configured: string) {
   return full.endsWith('/_') ? [full, full.slice(0, -2)] : [full]
 }
 
+/** Where a path really leads, for what exists of it, following a link to something not there yet too. */
+export function agyRealPath(path: string, depth = 0): string {
+  try {
+    if (existsSync(path)) return realpathSync(path)
+    const parent = dirname(path)
+    if (parent === path) return path
+    if (depth < 16 && lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) return agyRealPath(resolve(parent, readlinkSync(path)), depth + 1)
+    return join(agyRealPath(parent, depth), basename(path))
+  } catch { return path }
+}
+
 function under(path: string, folder: string) {
   const way = relative(folder, path)
   return way === '' || !way.startsWith('..') && !isAbsolute(way)
@@ -93,7 +105,9 @@ export function agyToolCheck(tool: { name?: unknown; args?: unknown }, workspace
     const folders = workspace.folders.map(real)
     // A link in the worktree is judged by where it leads, not by what its path says.
     const places = ['Path', 'AbsolutePath', 'TargetFile', 'DirectoryPath', 'SearchPath', 'SearchDirectory', 'File'].map(key => text(args[key])).filter((path): path is string => path !== undefined).map(path => real(isAbsolute(path) ? path : resolve(first ?? '/', path)))
-    const shielded = (place: string) => folders.some(folder => under(place, folder) && AGY_PROTECTED.includes(relative(folder, place).split('/')[0])) || (workspace.hooks ?? []).map(real).some(folder => under(place, folder))
+    // Names in any case: a disk that ignores case opens .CLAUDE as .claude.
+    const lower = (path: string) => path.toLowerCase()
+    const shielded = (place: string) => folders.some(folder => under(lower(place), lower(folder)) && AGY_PROTECTED.includes(lower(relative(lower(folder), lower(place))).split('/')[0])) || (workspace.hooks ?? []).map(real).some(folder => under(lower(place), lower(folder)))
     const allowed = places.length && places.every(place => folders.some(folder => under(place, folder)) && !(WRITE_TOOLS.has(name) && shielded(place)))
     return allowed ? { action: 'pass' } : { action: 'ask' }
   }

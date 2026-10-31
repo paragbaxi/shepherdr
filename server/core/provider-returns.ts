@@ -15,7 +15,10 @@ export class CoreProviderReturns {
   private running = false
   constructor(private source: CoreSource) {}
   private safe(task: CoreTask, agent: CoreAgent, row: ProviderReturn) {
-    return task.workflow === 'working' && !task.archived && !this.source.tasks.busy(task.id) &&
+    // A Ready task goes back too, or the human's next message would spend Gemini with Claude available. A full machine
+    // would turn its restart into Queued, so that waits.
+    const room = task.workflow === 'working' || task.workflow === 'ready' && !this.source.health?.room(task.machine, task.id)
+    return room && !task.archived && !this.source.tasks.busy(task.id) &&
       !this.source.openPermissions(agent).length && !this.source.questions.open(agent.chat).length && !this.source.secrets.open(agent.chat).length &&
       (row.stalled || this.source.logs.providerTurn(agent).complete || this.source.agents.terminal(agent)?.state === 'finished')
   }

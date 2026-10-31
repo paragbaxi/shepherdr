@@ -11,6 +11,7 @@ import { CoreTaskProcesses } from './task-processes.ts'
 import { taskOptions, validateTaskSettings } from './task-options.ts'
 import { CLI_NAME, backupKindOf, kindOf } from './settings.ts'
 import { isGemini, parseAgy } from '../../shared/models.ts'
+import { AGY_PROTECTED } from '../../helper/core-agy-policy.ts'
 import { CoreGit } from './git.ts'
 import { pickSpeed } from '../common/restart.ts'
 import type { CoreSource } from './source.ts'
@@ -342,9 +343,18 @@ export class CoreTasks {
   async providerReturn(id: string, launch: string) {
     return this.change(id, async () => {
       const task = this.get(id), agent = task && this.source.agents.get(task.chat), takeover = task?.providerTakeover
-      if (!task || !agent || !takeover || agent.launch !== launch || agent.kind !== takeover.to || takeover.state !== 'started' || task.workflow !== 'working' || task.archived || task.pilot || agent.pilot) return false
+      if (!task || !agent || !takeover || agent.launch !== launch || agent.kind !== takeover.to || takeover.state !== 'started' || !['working', 'ready'].includes(task.workflow) || task.archived || task.pilot || agent.pilot) return false
       if (this.source.openPermissions(agent).length || this.source.questions.open(task.chat).length || this.source.secrets.open(task.chat).length) return false
       const location = { machine: task.machine, folder: task.folder }
+      // On a disk that ignores case, .CLAUDE is the settings the returning agent would load. Sandbox rules go by exact name.
+      const odd = (await this.source.files.exec(task.machine, ['ls', '-A'], task.folder)).toString('utf8').split('\n').filter(name => AGY_PROTECTED.includes(name.toLowerCase()) && !AGY_PROTECTED.includes(name))
+      if (odd.length) {
+        task.startError = `${CLI_NAME[takeover.to]} left ${odd.join(', ')} in the worktree. Look at it before this task goes back: remove it, then restart the task.`; this.save(task)
+        const card = `provider-return-odd-${task.id}-${takeover.at}`
+        this.source.post(task.chat, { id: card, who: 'agent', card: { id: card, text: task.startError }, at: Date.now() })
+        this.source.emit('alert', { id: card, from: 'Shepherdr', title: `${task.id} did not go back`, body: task.startError, go: { place: task.place, task: task.id, focus: card }, task: true })
+        return false
+      }
       const commits = await this.git.run(location, ['log', '--oneline', '-20', `${task.base}..${task.branch}`])
       const changes = await this.git.run(location, ['status', '--short'])
       const chat = this.source.logs.messages(task.chat).filter(message => message.text && (message.at ?? 0) >= takeover.at).slice(-12).map(message => `${message.who}: ${message.text}`).join('\n\n').slice(-12000)

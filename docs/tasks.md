@@ -77,18 +77,20 @@
     CLI's login changes. Once that works the task goes back to that agent in the same worktree and branch with all work
     kept, resuming its own session, and a card says so. This also happens after Antigravity has run out. A task can go
     to Antigravity again later, but only after its agent finished a turn since coming back, and at most three times:
-    after that it needs you, so the two never go back and forth. A task that is Ready stays put until you write to it,
-    so your next message takes one more Antigravity turn before it goes back. Restarting a task that is on Antigravity
-    returns it to its agent.
+    after that it needs you, so the two never go back and forth. A task that is Ready goes back the same way and stays
+    Ready. Restarting a task that is on Antigravity returns it to its agent.
 
   On Antigravity the chat works as usual: its replies and steps come from its own transcript, status from its hooks,
   and `shepherdr ask` and other cards still appear. It gets no more than a task agent: commands run in `agy`'s terminal
-  sandbox, without `--dangerously-skip-permissions`. They write only in this worktree, temp folders, its own notes and
-  the parts of git's folder a commit needs, and can't read the launch credentials or reach the network.
-  Neither commands nor edits may touch what something outside the sandbox later acts on, without a card: git's hooks,
+  sandbox, without `--dangerously-skip-permissions`. They write only in this worktree, temp folders, its own conversation folder
+  (where its transcript also lives, which the chat reads) and the parts of git's folder a commit needs, and can't read
+  the launch credentials or reach the network, unless `agy`'s own settings were changed to allow it.
+  Neither commands nor edits may touch the files that say what runs outside the sandbox, without a card: git's hooks,
   config and metadata pointers, the worktree's `.git`, a hooks folder the repository sets (`core.hooksPath`, as husky
   does), its `.agents` (`agy`'s own hooks), and `.claude`, `.codex` and `.mcp.json`, which the agent it hands back to
-  would load. Anything else that leaves the sandbox or the worktree is a permission card you answer; once you allow it,
+  would load. Names in another case are held back too: a task with such a name in its worktree doesn't go back until
+  you've looked. The code it edits is still code: a test or a hook that later runs it, on any agent, runs it outside
+  the sandbox, as with any agent's change. Anything else that leaves the sandbox or the worktree is a permission card you answer; once you allow it,
   Shepherdr answers `agy`'s own prompt for exactly that, going by the prompt `agy` reports in its status, never by
   reading its screen. Only its plain `shepherdr` commands run outside the sandbox without a card, as they need their
   core socket (`secret run`, `secret env`, `start` and `stop` are not among them). Pushing goes through `shepherdr pr`.

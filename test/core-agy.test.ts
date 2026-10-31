@@ -1,12 +1,13 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CoreStore } from '../server/core/store.ts'
 import { CoreSettings, backupKindOf, kindOf } from '../server/core/settings.ts'
 import { AgyReader, agyErrorCode, agyUserText } from '../server/common/readers/agy.ts'
 import { CoreRemotes } from '../server/core/remote.ts'
-import { agyHookFolders, agyOwnCommand, agySessionSettings, agyToolCheck } from '../helper/core-agy-policy.ts'
+import { agyHookFolders, agyOwnCommand, agyRealPath, agySessionSettings, agyToolCheck } from '../helper/core-agy-policy.ts'
+import { outputFromLine } from '../server/activity.ts'
 import { agyPromptWords } from '../server/core/agy-approvals.ts'
 import { isGemini, parseAgy, TABLE } from '../shared/models.ts'
 import { providerError, providerOutage } from '../server/common/provider-error.ts'
@@ -168,6 +169,7 @@ test('a configured hooks folder is only as protected as what it is', () => {
 test('what the human approved is named by the start of its first line', () => {
   expect(agyPromptWords({ BypassSandbox: true, CommandLine: 'git push origin main\nand more' })).toBe('git push origin main')
   expect(agyPromptWords({ Path: '/etc/hosts' })).toBe('/etc/hosts')
+  expect(agyPromptWords({ DirectoryPath: '/etc' })).toBe('/etc')
   expect(agyPromptWords({ CommandLine: '"git push"' })).toBe('git push')
   expect(agyPromptWords({ CommandLine: 'x'.repeat(80) })).toHaveLength(40)
   expect(agyPromptWords({})).toBe('')
@@ -196,4 +198,26 @@ test('Antigravity launch files are allowed on a remote machine, beside its workt
   await remotes.privateFile('box', runtime, '/home/me/shepherdr-agents/install/digest/sessions/grant.settings.json', '{}')
   expect(runs).toHaveLength(2)
   await expect(remotes.privateFile('box', runtime, '/home/me/elsewhere/settings.json', '{}')).rejects.toThrow('outside its runtime')
+})
+
+test('protected names count in any case, and a link is followed to where it leads even if nothing is there yet', () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'shep-agy-link-'))), work = join(home, 'work')
+  try {
+    mkdirSync(join(work, 'src'), { recursive: true }); writeFileSync(join(work, 'src/a.ts'), '')
+    symlinkSync('.mcp.json', join(work, 'note.md'))
+    symlinkSync(join(home, 'away.txt'), join(work, 'out.md'))
+    symlinkSync('../.claude', join(work, 'src/dir'))
+    expect(agyRealPath(join(work, 'note.md'))).toBe(join(work, '.mcp.json'))
+    expect(agyRealPath(join(work, 'src/dir/settings.json'))).toBe(join(work, '.claude/settings.json'))
+    expect(agyRealPath(join(work, 'src/new.ts'))).toBe(join(work, 'src/new.ts'))
+    const here = { folders: [work], command: WORK.command, real: (path: string) => agyRealPath(path) }
+    const write = (Path: string) => agyToolCheck({ name: 'write_file', args: { Path } }, here)
+    for (const path of ['note.md', 'out.md', 'src/dir/settings.json', '.CLAUDE/settings.local.json', '.MCP.JSON', '.CODEX/config.toml', '.AGENTS/hooks.json', '.Git']) expect(write(path)).toEqual({ action: 'ask' })
+    for (const path of ['src/a.ts', 'src/new.ts']) expect(write(path)).toEqual({ action: 'pass' })
+  } finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('a step during a takeover shows its output', () => {
+  expect(outputFromLine(JSON.stringify({ step_index: 2, type: 'GENERIC', status: 'DONE', content: 'Command output' }), 'any')).toBe('Command output')
+  expect(outputFromLine(JSON.stringify({ step_index: 3, type: 'GENERIC', status: 'ERROR', error: 'denied' }), 'any')).toBe('denied')
 })
