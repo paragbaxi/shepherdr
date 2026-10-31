@@ -8,7 +8,7 @@ import { coreRequest } from '../server/core/request.ts'
 import type { CoreEndpoint } from '../server/core/client.ts'
 import type { MailCredential } from '../server/core/envelope.ts'
 import type { AgentHook } from '../server/core/model.ts'
-import { agyGrants, agyToolCheck } from './core-agy-policy.ts'
+import { agyToolCheck } from './core-agy-policy.ts'
 
 const NATIVE = process.argv[2] ?? '', WORKTREE = process.argv[3] ?? ''
 /** Shepherdr's own names for what each hook means; other hooks say nothing it needs. */
@@ -33,9 +33,9 @@ try {
     const check = agyToolCheck(input.toolCall ?? {}, { folders: [WORKTREE], command })
     // Its commands start in its first workspace folder, which is meant to sort as the worktree: this holds if it doesn't.
     const elsewhere = input.toolCall?.name === 'run_command' && !input.toolCall?.args?.Cwd && input.workspacePaths?.[0] !== WORKTREE ? { Cwd: WORKTREE } : {}
-    const allowed = (overwrite: Record<string, unknown> = {}) => ({ decision: 'allow', permissionOverrides: agyGrants(input.toolCall ?? {}), ...(Object.keys({ ...overwrite, ...elsewhere }).length ? { overwrite: { ...overwrite, ...elsewhere } } : {}) })
     // No decision reads as a denial here, so what its sandbox and edit mode already hold is said out loud too.
-    if (check.action === 'pass') answer = { decision: 'allow', ...(Object.keys(elsewhere).length ? { overwrite: elsewhere } : {}) }
+    const allowed = (overwrite: Record<string, unknown> = {}) => ({ decision: 'allow', ...(Object.keys({ ...overwrite, ...elsewhere }).length ? { overwrite: { ...overwrite, ...elsewhere } } : {}) })
+    if (check.action === 'pass') answer = allowed()
     if (check.action === 'allow') answer = allowed(check.overwrite)
     if (check.action === 'deny') answer = { decision: 'deny', reason: check.reason }
     if (check.action === 'ask') {

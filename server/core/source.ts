@@ -31,6 +31,7 @@ import { CoreSecrets } from './secrets.ts'
 import { CoreProviderRetries } from './provider-retries.ts'
 import { CoreProviderReturns } from './provider-returns.ts'
 import { CoreProviderLogin } from './provider-login.ts'
+import { CoreAgyApprovals } from './agy-approvals.ts'
 import { CoreArtifacts } from './artifacts.ts'
 import { CoreChat } from './chat.ts'
 import { CoreActivity } from './activity.ts'
@@ -87,6 +88,7 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
   readonly providerRetries: CoreProviderRetries
   readonly providerReturns: CoreProviderReturns
   readonly providerLogin: CoreProviderLogin
+  readonly agyApprovals: CoreAgyApprovals
   readonly artifacts: CoreArtifacts
   readonly chats: CoreChat
   readonly activities: CoreActivity
@@ -127,6 +129,7 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
     this.providerRetries = new CoreProviderRetries(this)
     this.providerLogin = new CoreProviderLogin(this.files)
     this.providerReturns = new CoreProviderReturns(this)
+    this.agyApprovals = new CoreAgyApprovals(this)
     this.artifacts = new CoreArtifacts(this, installation.id)
     this.chats = new CoreChat(this, installation.id)
     this.activities = new CoreActivity(this)
@@ -167,6 +170,7 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
       if (!this.quiescing) { this.pilots.wakes.tick(); this.news.deliver() }
       if (!this.quiescing) void this.providerRetries.tick().catch(error => this.faults.set('provider-retry', error.message))
       if (!this.quiescing) void this.providerReturns.tick().catch(error => this.faults.set('provider-return', error.message))
+      if (!this.quiescing) void this.agyApprovals.tick().catch(error => this.faults.set('agy-approval', error.message))
       if (!this.quiescing) void this.pilots.usage.poll().catch(error => this.faults.set('pilot-usage', error.message))
       if (this.connected()) { void this.refresh().then(() => this.mailbox.resync()).catch(error => this.faults.set('core', error.message)); void this.tasks.tick().catch(error => this.faults.set('queue', error.message)); return }
       if (this.recovering || this.core.current.error?.includes('requires core')) return
@@ -382,6 +386,7 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
         permission.settled = true; permission.allow = allow; permission.question.sent = action.choice
         this.store.set('permission', permission.id, permission)
         const agent = this.agents.get(action.chat)
+        if (agent && allow) { try { this.agyApprovals.approved(agent, JSON.parse(permission.question.screen ?? 'null')) } catch { /* Too long to read back: the human answers its Terminal. */ } }
         if (agent && agent.permission === permission.id) { agent.permission = this.openPermissions(agent)[0]?.id; agent.state = agent.permission ? 'blocked' : 'working'; this.store.set('agent', agent.chat, agent) }
         this.post(action.chat, { id: `permission-${permission.id}`, who: 'agent', question: permission.question, at: Date.now() })
         this.forwardQuestion(action.chat, permission.question, allow ? 'Allow once' : 'Deny', action.space ? 'space' : 'task')

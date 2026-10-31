@@ -356,3 +356,29 @@ test('if Antigravity is missing, the task keeps its agent and needs the human; i
   expect(handed.launches.filter(launch => launch.kind === 'agy')).toHaveLength(1)
   expect(cards(f).at(-1)).toContain('Cut off by its provider: Out of allowance')
 }))
+
+test('an approved Antigravity command answers its own prompt once, and only that prompt', () => fixture(async f => {
+  const agent = { ...f.agent, kind: 'agy' } as CoreAgent
+  f.source.store.set('agent', agent.chat, agent)
+  let status: CoreTerminal['status'] = { state: 'working', app: 'antigravity' }
+  f.source.agents.terminal = () => ({ address: 't1', state: 'live', status } as CoreTerminal)
+  const keys: unknown[] = []
+  f.source.core.call = (async (_method: string, params: { keys?: unknown }) => { keys.push(params.keys); return {} }) as typeof f.source.core.call
+  f.source.agyApprovals.approved(agent, { BypassSandbox: true, CommandLine: 'git push origin main' }, 1000)
+  await f.source.agyApprovals.tick(1001)
+  status = { state: 'blocked', kind: 'permission', msg: 'Approve RunCommand: rm -rf /' }
+  await f.source.agyApprovals.tick(1002)
+  expect(keys).toEqual([])
+  status = { state: 'blocked', kind: 'permission', msg: 'Approve RunCommand: git push origin main' }
+  await f.source.agyApprovals.tick(1003)
+  expect(keys).toEqual([['enter']])
+  await f.source.agyApprovals.tick(1004)
+  expect(keys).toEqual([['enter']])
+  // Too late: the human answers its Terminal.
+  f.source.agyApprovals.approved(agent, { CommandLine: 'git push origin main' }, 2000)
+  await f.source.agyApprovals.tick(2000 + 60_001)
+  expect(keys).toEqual([['enter']])
+  // Other agents never get keys.
+  f.source.agyApprovals.approved(f.agent, { CommandLine: 'git push origin main' }, 3000)
+  expect(f.source.store.all('agy-approved')).toEqual([])
+}))

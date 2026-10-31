@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { CoreStore } from '../server/core/store.ts'
 import { CoreSettings, backupKindOf, kindOf } from '../server/core/settings.ts'
 import { AgyReader, agyUserText } from '../server/common/readers/agy.ts'
-import { agyGrants, agySessionSettings, agyToolCheck, plainWords } from '../helper/core-agy-policy.ts'
+import { agySessionSettings, agyToolCheck, plainWords } from '../helper/core-agy-policy.ts'
+import { agyPromptWords } from '../server/core/agy-approvals.ts'
 import { isGemini, parseAgy, TABLE } from '../shared/models.ts'
 import { providerError, providerOutage } from '../server/common/provider-error.ts'
 import type { CoreFiles } from '../server/core/files.ts'
@@ -129,11 +130,12 @@ test('tools outside the worktree become cards and tools that spend or ask out of
   expect(tool('command_status')).toEqual({ action: 'pass' })
 })
 
-test('an approved command gets a grant for exactly itself', () => {
-  expect(agyGrants({ name: 'run_command', args: { CommandLine: 'git push' } })).toEqual(['command(git push)', 'unsandboxed(git push)'])
-  expect(agyGrants({ name: 'read_file', args: { Path: '/etc/hosts' } })).toEqual(['read_file(/etc/hosts)'])
-  expect(agyGrants({ name: 'write_file', args: { TargetFile: '"/x/y"' } })).toEqual(['write_file(/x/y)'])
-  expect(agyGrants({ name: 'mcp_something', args: {} })).toEqual([])
+test('what the human approved is named by the start of its first line', () => {
+  expect(agyPromptWords({ BypassSandbox: true, CommandLine: 'git push origin main\nand more' })).toBe('git push origin main')
+  expect(agyPromptWords({ Path: '/etc/hosts' })).toBe('/etc/hosts')
+  expect(agyPromptWords({ CommandLine: 'x'.repeat(80) })).toHaveLength(40)
+  expect(agyPromptWords({})).toBe('')
+  expect(agyPromptWords(null)).toBe('')
 })
 
 test('session settings stay in the sandbox with credits off, and protect git hooks and its own hooks', () => {

@@ -79,20 +79,6 @@ export function agySessionSettings(input: { worktree: string; workspace: string;
   }
 }
 
-/** A hook's allow alone doesn't lift its own permission check: this grant, for exactly what was approved, does. */
-export function agyGrants(tool: { name?: unknown; args?: unknown }) {
-  const args = tool.args && typeof tool.args === 'object' ? tool.args as Record<string, unknown> : {}
-  const path = ['Path', 'AbsolutePath', 'TargetFile', 'DirectoryPath', 'SearchPath', 'SearchDirectory', 'File'].map(key => text(args[key])).find(Boolean)
-  const url = ['Url', 'URL'].map(key => text(args[key])).find(Boolean)
-  switch (tool.name) {
-    case 'run_command': { const line = text(args.CommandLine); return line ? [`command(${line})`, `unsandboxed(${line})`] : [] }
-    case 'read_file': case 'view_file': case 'list_dir': case 'grep_search': case 'find_by_name': return path ? [`read_file(${path})`] : []
-    case 'write_file': case 'write_to_file': case 'edit_file': case 'replace_file_content': case 'multi_replace_file_content': return path ? [`write_file(${path})`] : []
-    case 'read_url': case 'read_url_content': case 'execute_url': return url ? [`read_url(${url})`] : []
-    default: return []
-  }
-}
-
 function inside(path: string, folders: string[]) {
   const full = isAbsolute(path) ? path : resolve(folders[0] ?? '/', path)
   return folders.some(folder => {
