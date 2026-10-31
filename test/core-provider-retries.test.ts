@@ -406,10 +406,20 @@ test('a message that arrives during the check, or a differently-cased settings f
   f.source.providerLogin.available = async () => true
   const listing = f.source.files.exec
   f.source.files.exec = (async (machine: string, argv: string[], ...rest: never[]) => argv[0] === 'ls' ? Buffer.from('README.md\n.CLAUDE\n') : listing(machine, argv, ...rest)) as typeof f.source.files.exec
-  await f.source.providerReturns.tick(at + 7 * 60_000)
+  const later = at + 60 * 60_000
+  await f.source.providerReturns.tick(later)
   expect(run.launches).toHaveLength(1)
   expect(f.source.tasks.get(f.task.id)?.startError).toContain('.CLAUDE')
   expect(cards(f).at(-1)).toContain('.CLAUDE')
+  // It doesn't ask again every tick, and goes once the name is gone.
+  let asked = 0
+  f.source.providerLogin.available = async () => { asked++; return true }
+  await f.source.providerReturns.tick(later + 1)
+  expect(asked).toBe(0)
+  f.source.files.exec = listing
+  await f.source.providerReturns.tick(later + 2 * 60 * 60_000)
+  expect(run.launches[1]).toMatchObject({ kind: 'claude' })
+  expect(f.source.tasks.get(f.task.id)?.startError).toBeUndefined()
 }))
 
 test('a Ready task goes back too, and stays Ready', () => fixture(async f => {

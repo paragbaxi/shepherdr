@@ -349,10 +349,13 @@ export class CoreTasks {
       // On a disk that ignores case, .CLAUDE is the settings the returning agent would load. Sandbox rules go by exact name.
       const odd = (await this.source.files.exec(task.machine, ['ls', '-A'], task.folder)).toString('utf8').split('\n').filter(name => AGY_PROTECTED.includes(name.toLowerCase()) && !AGY_PROTECTED.includes(name))
       if (odd.length) {
-        task.startError = `${CLI_NAME[takeover.to]} left ${odd.join(', ')} in the worktree. Look at it before this task goes back: remove it, then restart the task.`; this.save(task)
-        const card = `provider-return-odd-${task.id}-${takeover.at}`
-        this.source.post(task.chat, { id: card, who: 'agent', card: { id: card, text: task.startError }, at: Date.now() })
-        this.source.emit('alert', { id: card, from: 'Shepherdr', title: `${task.id} did not go back`, body: task.startError, go: { place: task.place, task: task.id, focus: card }, task: true })
+        const words = `${CLI_NAME[takeover.to]} left ${odd.join(', ')} in the worktree. Look at it and remove it: this task goes back at its next check after that.`
+        if (task.startError !== words) {
+          task.startError = words; this.save(task)
+          const card = `provider-return-odd-${task.id}-${takeover.at}`
+          this.source.post(task.chat, { id: card, who: 'agent', card: { id: card, text: words }, at: Date.now() })
+          this.source.emit('alert', { id: card, from: 'Shepherdr', title: `${task.id} did not go back`, body: words, go: { place: task.place, task: task.id, focus: card }, task: true })
+        }
         return false
       }
       const commits = await this.git.run(location, ['log', '--oneline', '-20', `${task.base}..${task.branch}`])
