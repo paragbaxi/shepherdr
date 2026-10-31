@@ -81,13 +81,17 @@
 
   On Antigravity the chat works as usual: its replies and steps come from its own transcript, status from its hooks,
   and `shepherdr ask` and other cards still appear. It gets no more than a task agent: commands run in `agy`'s terminal
-  sandbox (this worktree, no network) and edits stay in the worktree, without `--dangerously-skip-permissions`. Anything
-  that leaves the sandbox or the worktree is a permission card you answer, except its own plain `shepherdr` commands,
-  which need their core socket (`secret run`, `secret env`, `start` and `stop` are not among them). So a backup that
-  needs `git commit` in a linked worktree may wait for your yes. For the session only, and never saved, `agy` is told to
-  trust the task's worktree and to wait for no plan review. If it can't start at all, the agent it would replace keeps
-  running and the task needs you; if it starts and shows nothing for three minutes (a sign-in screen, say), its card
-  says to open its Terminal.
+  sandbox (this worktree and git's own folder, without git's hooks or config, and no network) and edits stay in the
+  worktree, without `--dangerously-skip-permissions`. Anything that leaves the sandbox or the worktree is a permission
+  card you answer; once you allow it, Shepherdr answers `agy`'s own prompt for exactly that, going by the prompt `agy`
+  reports in its status, never by reading its screen. Only its plain `shepherdr` commands run outside the sandbox
+  without a card, as they need their core socket (`secret run`, `secret env`, `start` and `stop` are not among them).
+  Pushing goes through `shepherdr pr`. A prompt with no card behind it shows as Needs you, to answer in its Terminal.
+  For the session only, and never saved, `agy` is told to trust the task's worktree and to wait for no plan review, and
+  these session rules replace any `permissions` in its own settings file. If it can't start at all, the agent it would
+  replace keeps running and the task needs you; if it starts and shows nothing for three minutes (a sign-in screen,
+  say), its card says to open its Terminal.
+
 - Status comes from native logs/hooks and explicit OSC 7501 reports. Both Claude Code and Codex receive their
   launch-specific hook configuration; personal settings are not changed. A native ended turn with no recorded
   background work needs you, but remains a Working task until its workflow changes. Process liveness never means

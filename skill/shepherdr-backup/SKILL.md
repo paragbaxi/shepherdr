@@ -34,9 +34,10 @@ reply is `<no-reply>short reason</no-reply>`.
 
 ## What you may do
 
-- Your commands run in a sandbox: this worktree only, no network. Don't try to get around it.
-- If a command really needs to leave the sandbox (a `git commit` in a linked worktree, for example), run it again with
-  `BypassSandbox` set to true: the human gets a card and decides. A denial is final: don't try another way.
+- Your commands start in this worktree, in a sandbox: no network, and nothing outside it but git's own folder, so
+  `git add` and `git commit` just work. Don't try to get around it. Push with `shepherdr pr`, never `git push`.
+- If a command really needs to leave the sandbox, run it again with `BypassSandbox` set to true: the human gets a card
+  and decides. A denial is final: don't try another way.
 - Anything irreversible needs the human's yes: deleting data, production deploys, force-pushing others' branches,
   messages outside.
 
