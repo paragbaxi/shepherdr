@@ -9,13 +9,13 @@ export type AgyCheck =
   | { action: 'deny'; reason: string }
   | { action: 'ask' }
 
-/** Tools that read the workspace or manage the agent's own session. */
 const READ_TOOLS = new Set(['read_file', 'view_file', 'list_dir', 'grep_search', 'find_by_name'])
 const WRITE_TOOLS = new Set(['write_file', 'write_to_file', 'edit_file', 'replace_file_content', 'multi_replace_file_content'])
 /** Worktree files that something outside the sandbox acts on: this CLI's own customizations (hooks among them), git's
  *  pointer to its metadata, and the settings the agent it hands back to loads when it resumes here. */
 export const AGY_CUSTOMIZATIONS = ['.agents', '.agent', '_agents', '_agent']
 export const AGY_PROTECTED = [...AGY_CUSTOMIZATIONS, '.git', '.claude', '.codex', '.mcp.json']
+/** Tools that manage the agent's own session. */
 const OWN_TOOLS = new Set(['command_status', 'send_command_input', 'manage_task', 'task_boundary', 'notify_user'])
 /** Spends allowance out of sight, or asks where the chat can't answer. */
 const REFUSED: Record<string, string> = {
@@ -23,8 +23,6 @@ const REFUSED: Record<string, string> = {
   browser_subagent: 'A backup agent works alone, to spend little. Do this yourself.',
   ask_question: 'The human only reads the chat. Ask with: shepherdr ask "..." --choice "..." and end your turn.',
 }
-/** Its own product commands: each is already checked against this launch's credential. Not `start`, `stop` or `secret run`. */
-const OWN_COMMANDS = new Set(['ask', 'plan', 'ready', 'pr', 'checks', 'merge', 'review', 'todo', 'artifact', 'show', 'help', 'alert', 'models'])
 
 /** The transcript format double-encodes string arguments; hooks may or may not. */
 const text = (value: unknown) => {
@@ -33,85 +31,70 @@ const text = (value: unknown) => {
   try { const parsed = JSON.parse(value); return typeof parsed === 'string' ? parsed : value } catch { return value }
 }
 
-/** The words of one plain command, or nothing where a shell would do more than run it. */
-export function plainWords(line: string): string[] | undefined {
-  const words: string[] = []
-  let word = '', open = false, quote = ''
-  for (let index = 0; index < line.length; index++) {
-    const c = line[index]
-    if (quote === "'") { if (c === "'") quote = ''; else word += c; continue }
-    if (quote === '"') {
-      if (c === '"') quote = ''
-      else if (c === '$' || c === '`') return undefined
-      else if (c === '\\' && index + 1 < line.length) word += line[++index]
-      else word += c
-      continue
-    }
-    if (c === "'" || c === '"') { quote = c; open = true; continue }
-    if (c === ' ' || c === '\t') { if (open) { words.push(word); word = ''; open = false } continue }
-    if (c === '\\' && index + 1 < line.length && line[index + 1] !== '\n') { word += line[++index]; open = true; continue }
-    if (';|&<>$`()\n\r#*?~{}[]!='.includes(c)) return undefined
-    word += c; open = true
-  }
-  if (quote) return undefined
-  if (open) words.push(word)
-  return words
+const UNQUOTED = '[^;&|`$<>()\\n\\r\\\\"\'#*?~{}\\[\\]!]', DOUBLE = '"[^"`$\\\\\\n\\r]*"', SINGLE = "'[^'\\n\\r]*'"
+const WORDS = `(?:${UNQUOTED}|${DOUBLE}|${SINGLE})*`
+/** Its own product commands, each already checked against this launch's credential, as one plain command a shell would
+ *  just run: quoted words may say anything, but nothing can run anything else. Not `start`, `stop`, bare `status` or
+ *  `secret run`. The one definition for both the hook and the session rule: if they disagreed, a command the hook let
+ *  through would stop on a prompt on a screen nobody sees. */
+export function agyOwnCommand(command: string) {
+  const path = command.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+  const subs = ['ask', 'plan', 'ready', 'pr', 'checks', 'merge', 'review', 'todo', 'artifact', 'show', 'help', 'alert', 'models', 'status [\\w/.:-]+', 'secret list', 'secret ask'].join('|')
+  return `^(?:${path}|shepherdr) (?:agent )?(?:${subs})(?: ${WORDS})?$`
 }
 
-function ownCommand(line: string, command: string) {
-  const words = plainWords(line)
-  if (!words?.length || (words[0] !== command && words[0] !== 'shepherdr')) return false
-  const rest = words[1] === 'agent' ? words.slice(2) : words.slice(1)
-  const sub = rest[0]
-  if (sub === 'status') return rest.length > 1 // Bare `status` is the human's lifecycle command.
-  if (sub === 'secret') return ['list', 'ask'].includes(rest[1] ?? '')
-  return !!sub && OWN_COMMANDS.has(sub)
-}
-
-const WORD = '[^;&|`$<>()\\n]'
 /** What this session may do without a prompt, on top of its sandbox and only for this session: its own plain product
  *  commands, and just the parts of git's folder a commit from a linked worktree writes. Not git's hooks, config or the
  *  files saying where its metadata is, which programs outside the sandbox act on later; not this launch's own folder or
  *  the worktree files in AGY_PROTECTED; and not the folder of launch credentials. The worktree is only trusted when it
  *  ships none of this CLI's customizations: otherwise its own prompt lets the human decide. */
-export function agySessionSettings(input: { worktree: string; workspace: string; gitDir: string; worktreeGitDir: string; sessions: string; command: string; trustWorktree: boolean }) {
-  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
-  const words = [...OWN_COMMANDS, `status ${WORD}+`, 'secret list', `secret ask`].join('|')
+export function agySessionSettings(input: { worktree: string; workspace: string; gitDir: string; worktreeGitDir: string; sessions: string; command: string; trustWorktree: boolean; hooks: string[] }) {
   return {
     trustedWorkspaces: input.trustWorktree ? [input.worktree, input.workspace] : [input.workspace], enableTerminalSandbox: true, toolPermission: 'proceed-in-sandbox', artifactReviewPolicy: 'always-proceed', useG1Credits: false,
     permissions: {
-      allow: [`command(regex:^(?:${escape(input.command)}|shepherdr) (?:agent )?(?:${words})(?: ${WORD}*)?$)`, `read_file(${input.gitDir})`,
+      allow: [`command(regex:${agyOwnCommand(input.command)})`, `read_file(${input.gitDir})`,
         ...['objects', 'refs', 'logs', 'packed-refs'].map(name => `write_file(${input.gitDir}/${name})`), `write_file(${input.worktreeGitDir})`],
       deny: [`write_file(${input.workspace})`, `read_file(${input.sessions})`, `write_file(${input.gitDir}/hooks)`, `write_file(${input.gitDir}/config)`,
-        ...['commondir', 'gitdir', 'config.worktree'].map(name => `write_file(${input.worktreeGitDir}/${name})`), ...AGY_PROTECTED.map(name => `write_file(${input.worktree}/${name})`)],
+        ...['commondir', 'gitdir', 'config.worktree'].map(name => `write_file(${input.worktreeGitDir}/${name})`), ...AGY_PROTECTED.map(name => `write_file(${input.worktree}/${name})`),
+        ...input.hooks.map(path => `write_file(${path})`)],
     },
   }
 }
 
-function inside(path: string, folders: string[]) {
-  const full = isAbsolute(path) ? path : resolve(folders[0] ?? '/', path)
-  return folders.some(folder => {
-    const way = relative(folder, full)
-    return way === '' || !way.startsWith('..') && !isAbsolute(way)
-  })
+/** Where git would look for hooks when this repository sets its own `core.hooksPath` (husky, `.githooks`). Whatever runs
+ *  there runs outside the sandbox on the next `shepherdr pr`, so it counts as protected. Husky's `_` calls the folder above. */
+export function agyHookFolders(worktree: string, configured: string) {
+  const value = configured.trim()
+  if (!value) return []
+  const full = isAbsolute(value) ? value : resolve(worktree, value)
+  return full.endsWith('/_') ? [full, full.slice(0, -2)] : [full]
 }
-const isProtected = (path: string, folders: string[]) => folders.some(folder => AGY_PROTECTED.includes(relative(folder, isAbsolute(path) ? path : resolve(folder, path)).split('/')[0]))
 
-export function agyToolCheck(tool: { name?: unknown; args?: unknown }, workspace: { folders: string[]; command: string }): AgyCheck {
+function under(path: string, folder: string) {
+  const way = relative(folder, path)
+  return way === '' || !way.startsWith('..') && !isAbsolute(way)
+}
+
+export function agyToolCheck(tool: { name?: unknown; args?: unknown }, workspace: { folders: string[]; command: string; hooks?: string[]; real?: (path: string) => string }): AgyCheck {
   const name = typeof tool.name === 'string' ? tool.name : ''
   const args = tool.args && typeof tool.args === 'object' ? tool.args as Record<string, unknown> : {}
   if (Object.hasOwn(REFUSED, name)) return { action: 'deny', reason: REFUSED[name] }
   if (OWN_TOOLS.has(name)) return { action: 'pass' }
   if (name === 'run_command') {
     const line = text(args.CommandLine)
-    if (line && ownCommand(line, workspace.command)) return { action: 'allow', overwrite: { BypassSandbox: true } } // Its own core socket is outside the sandbox.
+    if (line && new RegExp(agyOwnCommand(workspace.command)).test(line)) return { action: 'allow', overwrite: { BypassSandbox: true } } // Its own core socket is outside the sandbox.
     // Inside the sandbox it runs as it is. Asking to leave the sandbox is for the human.
     const leaving = args.BypassSandbox === true || text(args.BypassSandbox) === 'true'
     return leaving ? { action: 'ask' } : { action: 'pass' }
   }
   if (READ_TOOLS.has(name) || WRITE_TOOLS.has(name)) {
-    const paths = ['Path', 'AbsolutePath', 'TargetFile', 'DirectoryPath', 'SearchPath', 'SearchDirectory', 'File'].map(key => text(args[key])).filter(path => path !== undefined)
-    const allowed = paths.length && paths.every(path => inside(path!, workspace.folders) && !(WRITE_TOOLS.has(name) && isProtected(path!, workspace.folders)))
+    const real = workspace.real ?? (path => path)
+    const [first] = workspace.folders
+    const folders = workspace.folders.map(real)
+    // A link in the worktree is judged by where it leads, not by what its path says.
+    const places = ['Path', 'AbsolutePath', 'TargetFile', 'DirectoryPath', 'SearchPath', 'SearchDirectory', 'File'].map(key => text(args[key])).filter((path): path is string => path !== undefined).map(path => real(isAbsolute(path) ? path : resolve(first ?? '/', path)))
+    const shielded = (place: string) => folders.some(folder => under(place, folder) && AGY_PROTECTED.includes(relative(folder, place).split('/')[0])) || (workspace.hooks ?? []).map(real).some(folder => under(place, folder))
+    const allowed = places.length && places.every(place => folders.some(folder => under(place, folder)) && !(WRITE_TOOLS.has(name) && shielded(place)))
     return allowed ? { action: 'pass' } : { action: 'ask' }
   }
   return { action: 'ask' }

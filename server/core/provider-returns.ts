@@ -36,8 +36,11 @@ export class CoreProviderReturns {
           else if (row.stalled && agent.state !== 'starting') { row.stalled = false; await this.source.tasks.providerStalled(task.id, agent.launch, false) }
           if (now >= row.next && this.safe(task, agent, row)) {
             const model = takeover.back?.model ?? this.source.settings.catalog(takeover.from, task.place).default
-            const back = await this.source.providerLogin.available(agent.machine, takeover.from, model) && await this.source.tasks.providerReturn(task.id, agent.launch)
-            if (!back) { row.wait = Math.min(row.wait * 2, MOST); row.next = now + row.wait }
+            if (await this.source.providerLogin.available(agent.machine, takeover.from, model)) {
+              // That took a while: a message may have started a new turn meanwhile, and the next tick asks again.
+              const latest = this.source.tasks.get(task.id), running = this.source.agents.get(task.chat)
+              if (latest && running?.launch === agent.launch && this.safe(latest, running, row)) await this.source.tasks.providerReturn(task.id, agent.launch)
+            } else { row.wait = Math.min(row.wait * 2, MOST); row.next = now + row.wait }
           }
         } catch (error) { failure = error; row.wait = Math.min(row.wait * 2, MOST); row.next = now + row.wait } // One task's trouble keeps no other from going back.
         this.source.store.set('provider-return', key, row)

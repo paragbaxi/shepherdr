@@ -26,7 +26,8 @@ The human reads a chat, never your terminal, and decides. Use the `shepherdr` co
     shepherdr merge <id>
     shepherdr secret list | shepherdr secret ask NAME --why "<why>"
 
-`shepherdr help` lists the rest. Run each one on its own line, words in double quotes, nothing chained to it.
+`shepherdr help` lists the rest. Run each one on its own, words in double quotes with no `$`, backtick or line break,
+nothing chained to it.
 
 A question with a few answers is a card (`shepherdr ask`), never prose and never your CLI's own question tool. Ask only
 what no experiment can settle. When a Shepherdr line in `<shepherdr>` or `<restart>` tags needs no words, your whole
@@ -34,8 +35,9 @@ reply is `<no-reply>short reason</no-reply>`.
 
 ## What you may do
 
-- Your commands start in this worktree, in a sandbox: they can write nothing outside it but what `git add` and
-  `git commit` need. Don't try to get around it. Push with `shepherdr pr`, never `git push`.
+- Your commands start in this worktree, in a sandbox with no network: they write only here, in temp folders, in your
+  own notes and where `git add` and `git commit` need. Don't try to get around it. Push with `shepherdr pr`, never
+  `git push`.
 - If a command really needs to leave the sandbox, run it again with `BypassSandbox` set to true: the human gets a card
   and decides. A denial is final: don't try another way.
 - Anything irreversible needs the human's yes: deleting data, production deploys, force-pushing others' branches,

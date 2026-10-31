@@ -163,6 +163,7 @@ function agyCore(answers: { shipsCustomizations?: boolean } = {}) {
     if (method === 'terminal.run') { run = input; return { address: `t${++count}`, pid: count } }
     exec.push(input)
     if (input.argv[0] === 'mkdir' && !input.on) for (const path of input.argv.slice(4)) mkdirSync(path, { recursive: true })
+    if (input.argv[0] === 'git' && input.argv.includes('config')) return reply('.husky/_\n')
     if (input.argv[0] === 'git') return reply('/repo/.git\n/repo/.git/worktrees/task\n')
     if (input.argv[0] === 'sh') return reply('', answers.shipsCustomizations ? 1 : 0)
     return reply()
@@ -189,8 +190,9 @@ test('Antigravity starts on the named Gemini model, in its sandbox, with no perm
     expect(argv.at(-1)).toStartWith('<restart>')
     expect(argv.at(-1)).toContain('The brief')
     const hooks = JSON.parse(readFileSync(join(workspace, '.agents/hooks.json'), 'utf8'))
-    expect(hooks.shepherdr.PreToolUse[0].hooks[0].command).toContain("core-agy-hook.ts' PreToolUse '/work/task'")
+    expect(hooks.shepherdr.PreToolUse[0].hooks[0].command).toContain(`core-agy-hook.ts' PreToolUse '/work/task' '["/work/task/.husky/_","/work/task/.husky"]'`)
     expect(JSON.parse(readFileSync(join(workspace, 'settings.json'), 'utf8'))).toMatchObject({ trustedWorkspaces: ['/work/task', workspace], enableTerminalSandbox: true, useG1Credits: false })
+    expect(JSON.parse(readFileSync(join(workspace, 'settings.json'), 'utf8')).permissions.deny).toContain('write_file(/work/task/.husky)')
     // It sorts after any worktree beside it, so commands start in the worktree.
     expect(workspace > `${home}/worktrees/space/task`).toBe(true)
     await expect(agents.launch(SPACE, 'x', 'agy', 'p', { ...GEMINI, model: 'claude-opus-5-5-low' })).rejects.toThrow('only on a Gemini model')
@@ -211,7 +213,7 @@ test('a worktree shipping its own Antigravity customizations stays for the human
   } finally { store.close(); rmSync(home, { recursive: true, force: true }) }
 })
 
-test('on another machine Antigravity gets all its launch files past the remote check, before anything starts', async () => {
+test('on another machine Antigravity gets all its launch files past the remote check', async () => {
   const home = mkdtempSync(join(tmpdir(), 'shep-agy-remote-')), store = new CoreStore(home)
   try {
     const { core, exec, run } = agyCore()

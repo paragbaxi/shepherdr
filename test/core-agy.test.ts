@@ -6,7 +6,7 @@ import { CoreStore } from '../server/core/store.ts'
 import { CoreSettings, backupKindOf, kindOf } from '../server/core/settings.ts'
 import { AgyReader, agyErrorCode, agyUserText } from '../server/common/readers/agy.ts'
 import { CoreRemotes } from '../server/core/remote.ts'
-import { agySessionSettings, agyToolCheck, plainWords } from '../helper/core-agy-policy.ts'
+import { agyHookFolders, agyOwnCommand, agySessionSettings, agyToolCheck } from '../helper/core-agy-policy.ts'
 import { agyPromptWords } from '../server/core/agy-approvals.ts'
 import { isGemini, parseAgy, TABLE } from '../shared/models.ts'
 import { providerError, providerOutage } from '../server/common/provider-error.ts'
@@ -107,16 +107,24 @@ const WORK = { folders: ['/work/task'], command: '/app/bin/shepherdr' }
 const run = (CommandLine: string, more: object = {}) => agyToolCheck({ name: 'run_command', args: { CommandLine, ...more } }, WORK)
 
 test('its own Shepherdr commands reach their core outside the sandbox; nothing else is approved without the human', () => {
-  for (const line of ['shepherdr status X-1 "Writing tests" --done 40 --left 5m', '/app/bin/shepherdr ready X-1 --summary "Done" --facts "x"', 'shepherdr ask "Rerun?" --choice "Yes"', 'shepherdr agent merge X-1', 'shepherdr secret list'])
+  for (const line of ['shepherdr status X-1 "Writing tests" --done 40 --left 5m', 'shepherdr status mac/X-1 "a"', '/app/bin/shepherdr ready X-1 --summary "Done" --facts "x"', 'shepherdr ask "Rerun?" --choice "Yes"', 'shepherdr agent merge X-1', 'shepherdr secret list', 'shepherdr ask "Rerun CI on main & deploy?" --choice "Yes"', 'shepherdr ready X-1 --summary "Add login (OAuth)"', 'shepherdr ready X-1 --summary "a < b; c | d"', "shepherdr ask 'What about $HOME and `this`?'"])
     expect(run(line)).toEqual({ action: 'allow', overwrite: { BypassSandbox: true } })
   // Would run something else, or is the human's lifecycle command: it stays in the sandbox like any other command.
-  for (const line of ['shepherdr status', 'shepherdr stop', 'shepherdr start', 'shepherdr secret run KEY -- rm -rf /', 'shepherdr secret env KEY --file .env', 'shepherdr status X-1 "a" && rm -rf /', 'shepherdr status X-1 "$(rm -rf /)"', 'shepherdr status X-1 `id`', '/other/bin/shepherdr ready X-1', 'shepherdrx ready', 'PATH=/tmp shepherdr ready X-1'])
+  for (const line of ['shepherdr status', 'shepherdr status ', 'shepherdr stop', 'shepherdr start', 'shepherdr secret run KEY -- rm -rf /', 'shepherdr secret env KEY --file .env', 'shepherdr status X-1 "a" && rm -rf /', 'shepherdr status X-1 "$(rm -rf /)"', 'shepherdr status X-1 `id`', 'shepherdr ask "a\nb"', 'shepherdr ask "a" ; rm x', 'shepherdr ask "open', '/other/bin/shepherdr ready X-1', 'shepherdrx ready', 'PATH=/tmp shepherdr ready X-1'])
     expect(run(line)).toEqual({ action: 'pass' })
   expect(run('git status')).toEqual({ action: 'pass' })
   // Leaving the sandbox is always a card, its own command included when it isn't plainly its own.
   expect(run('git push', { BypassSandbox: true })).toEqual({ action: 'ask' })
   expect(run('git push', { BypassSandbox: '"true"' })).toEqual({ action: 'ask' })
   expect(run('shepherdr secret run KEY -- sh', { BypassSandbox: true })).toEqual({ action: 'ask' })
+})
+
+test('the hook and the session rule agree on every command, so none stops on a screen nobody sees', () => {
+  const settings = agySessionSettings({ worktree: '/w', workspace: '/x', gitDir: '/g', worktreeGitDir: '/g/w', sessions: '/s', command: '/app/bin/shepherdr', trustWorktree: true, hooks: [] })
+  const rule = new RegExp(settings.permissions.allow[0].slice('command(regex:'.length, -1))
+  expect(rule.source).toBe(new RegExp(agyOwnCommand('/app/bin/shepherdr')).source)
+  for (const line of ['shepherdr ask "Rerun CI on main & deploy?"', 'shepherdr ready X --summary "Add login (OAuth)"', 'shepherdr ask "a < b"', 'shepherdr ask "a\nb"', 'shepherdr stop', 'shepherdr ask "$(id)"', 'shepherdr status X "ok"'])
+    expect(run(line).action === 'allow').toBe(rule.test(line))
 })
 
 test('tools outside the worktree become cards and tools that spend or ask out of sight are refused', () => {
@@ -137,6 +145,24 @@ test('tools outside the worktree become cards and tools that spend or ask out of
   expect(tool('mcp_something')).toEqual({ action: 'ask' })
   for (const name of ['invoke_subagent', 'browser_subagent', 'ask_question']) expect(tool(name).action).toBe('deny')
   expect(tool('command_status')).toEqual({ action: 'pass' })
+  // Its own notes are fine; a repository's own hooks folder is not; a link is judged by where it leads.
+  const notes = { folders: ['/work/task', '/brain/conv'], command: WORK.command }
+  expect(agyToolCheck({ name: 'write_file', args: { Path: '/brain/conv/plan.md' } }, notes)).toEqual({ action: 'pass' })
+  const hooks = { ...WORK, hooks: agyHookFolders('/work/task', '.husky/_\n') }
+  expect(hooks.hooks).toEqual(['/work/task/.husky/_', '/work/task/.husky'])
+  expect(agyToolCheck({ name: 'write_file', args: { Path: '.husky/pre-push' } }, hooks)).toEqual({ action: 'ask' })
+  expect(agyToolCheck({ name: 'read_file', args: { Path: '.husky/pre-push' } }, hooks)).toEqual({ action: 'pass' })
+  expect(agyToolCheck({ name: 'write_file', args: { Path: 'src/a.ts' } }, hooks)).toEqual({ action: 'pass' })
+  const linked = { ...WORK, real: (path: string) => path.replace('/work/task/x', '/work/task/.claude') }
+  expect(agyToolCheck({ name: 'write_file', args: { Path: '/work/task/x/settings.json' } }, linked)).toEqual({ action: 'ask' })
+  const away = { ...WORK, real: (path: string) => path.replace('/work/task/y', '/etc') }
+  expect(agyToolCheck({ name: 'read_file', args: { Path: '/work/task/y/hosts' } }, away)).toEqual({ action: 'ask' })
+})
+
+test('a configured hooks folder is only as protected as what it is', () => {
+  expect(agyHookFolders('/w', '')).toEqual([])
+  expect(agyHookFolders('/w', '.githooks\n')).toEqual(['/w/.githooks'])
+  expect(agyHookFolders('/w', '/opt/hooks')).toEqual(['/opt/hooks'])
 })
 
 test('what the human approved is named by the start of its first line', () => {
@@ -149,14 +175,14 @@ test('what the human approved is named by the start of its first line', () => {
 })
 
 test('session settings stay in the sandbox with credits off, and protect what runs outside it', () => {
-  const input = { worktree: '/w/task', workspace: '/w_agy/grant', gitDir: '/repo/.git', worktreeGitDir: '/repo/.git/worktrees/task', sessions: '/app/sessions', command: '/app.1/bin/shepherdr', trustWorktree: true }
+  const input = { worktree: '/w/task', workspace: '/w_agy/grant', gitDir: '/repo/.git', worktreeGitDir: '/repo/.git/worktrees/task', sessions: '/app/sessions', command: '/app.1/bin/shepherdr', trustWorktree: true, hooks: ['/w/task/.husky'] }
   const settings = agySessionSettings(input)
   expect(settings).toMatchObject({ trustedWorkspaces: ['/w/task', '/w_agy/grant'], enableTerminalSandbox: true, toolPermission: 'proceed-in-sandbox', useG1Credits: false })
   expect(settings).not.toHaveProperty('dangerouslySkipPermissions')
   // A repository shipping its own hooks stays for the human to trust.
   expect(agySessionSettings({ ...input, trustWorktree: false }).trustedWorkspaces).toEqual(['/w_agy/grant'])
   expect(settings.permissions.allow.slice(1)).toEqual(['read_file(/repo/.git)', 'write_file(/repo/.git/objects)', 'write_file(/repo/.git/refs)', 'write_file(/repo/.git/logs)', 'write_file(/repo/.git/packed-refs)', 'write_file(/repo/.git/worktrees/task)'])
-  for (const rule of ['write_file(/w_agy/grant)', 'read_file(/app/sessions)', 'write_file(/repo/.git/hooks)', 'write_file(/repo/.git/config)', 'write_file(/repo/.git/worktrees/task/commondir)', 'write_file(/repo/.git/worktrees/task/gitdir)', 'write_file(/repo/.git/worktrees/task/config.worktree)', 'write_file(/w/task/.git)', 'write_file(/w/task/.agents)', 'write_file(/w/task/.claude)', 'write_file(/w/task/.mcp.json)']) expect(settings.permissions.deny).toContain(rule)
+  for (const rule of ['write_file(/w_agy/grant)', 'read_file(/app/sessions)', 'write_file(/repo/.git/hooks)', 'write_file(/repo/.git/config)', 'write_file(/repo/.git/worktrees/task/commondir)', 'write_file(/repo/.git/worktrees/task/gitdir)', 'write_file(/repo/.git/worktrees/task/config.worktree)', 'write_file(/w/task/.git)', 'write_file(/w/task/.agents)', 'write_file(/w/task/.claude)', 'write_file(/w/task/.mcp.json)', 'write_file(/w/task/.husky)']) expect(settings.permissions.deny).toContain(rule)
   const own = new RegExp(settings.permissions.allow[0].slice('command(regex:'.length, -1))
   for (const line of ['shepherdr status X-1 "Hi" --done 4', '/app.1/bin/shepherdr ready X --summary "ok"', 'shepherdr secret list', 'shepherdr agent merge X']) expect(own.test(line)).toBe(true)
   for (const line of ['shepherdr status', 'shepherdr stop', 'shepherdr start', 'shepherdr secret run K -- sh', 'shepherdr secret env K', 'shepherdr ask "a" && rm -rf /', 'shepherdr ask "$(id)"', '/appx1/bin/shepherdr ready X']) expect(own.test(line)).toBe(false)
@@ -170,9 +196,4 @@ test('Antigravity launch files are allowed on a remote machine, beside its workt
   await remotes.privateFile('box', runtime, '/home/me/shepherdr-agents/install/digest/sessions/grant.settings.json', '{}')
   expect(runs).toHaveLength(2)
   await expect(remotes.privateFile('box', runtime, '/home/me/elsewhere/settings.json', '{}')).rejects.toThrow('outside its runtime')
-})
-
-test('plain words only for a command a shell would just run', () => {
-  expect(plainWords(`a 'b c' "d \\"e" f\\ g`)).toEqual(['a', 'b c', 'd "e', 'f g'])
-  for (const line of ['a; b', 'a | b', 'a > b', 'a $(b)', 'a "$HOME"', 'a `b`', 'a\nb', 'A=1 b', 'a "open', 'a *']) expect(plainWords(line)).toBeUndefined()
 })

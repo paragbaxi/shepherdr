@@ -77,26 +77,29 @@
     CLI's login changes. Once that works the task goes back to that agent in the same worktree and branch with all work
     kept, resuming its own session, and a card says so. This also happens after Antigravity has run out. A task can go
     to Antigravity again later, but only after its agent finished a turn since coming back, and at most three times:
-    after that it needs you, so the two never go back and forth. Restarting a task that is on Antigravity returns it
-    to its agent.
+    after that it needs you, so the two never go back and forth. A task that is Ready stays put until you write to it,
+    so your next message takes one more Antigravity turn before it goes back. Restarting a task that is on Antigravity
+    returns it to its agent.
 
   On Antigravity the chat works as usual: its replies and steps come from its own transcript, status from its hooks,
   and `shepherdr ask` and other cards still appear. It gets no more than a task agent: commands run in `agy`'s terminal
-  sandbox, without `--dangerously-skip-permissions`. That is this worktree plus the parts of git's folder a commit
-  writes, and not the launch credentials; it doesn't stop network use, as a task agent's own permissions don't either. Neither commands nor edits may touch what something outside
-  the sandbox later acts on, without a card: git's hooks, config and metadata pointers, the worktree's `.git`, its
-  `.agents` (`agy`'s own hooks), and `.claude`, `.codex` and `.mcp.json`, which the agent it hands back to would load.
-  Anything else that leaves the sandbox or the worktree is a permission card you answer; once you allow it, Shepherdr
-  answers `agy`'s own prompt for exactly that, going by the prompt `agy` reports in its status, never by reading its
-  screen. Only its plain `shepherdr` commands run outside the sandbox without a card, as they need their core socket
-  (`secret run`, `secret env`, `start` and `stop` are not among them). Pushing goes through `shepherdr pr`. A prompt with
-  no card behind it shows as Needs you, to answer in its Terminal.
-  For the session only, and never saved, `agy` is told to trust the task's worktree and to wait for no plan review, and
-  these session rules replace any `permissions` in its own settings file. A repository that ships its own `.agents` is
-  not trusted this way: `agy` asks on its own screen and the task needs you. If `agy` isn't installed or signed in, or
-  doesn't offer the chosen model, the agent it would replace keeps running and the task needs you. If it fails after
-  that, the agent has already stopped: the task needs you and its work is kept, and restarting it returns it to that
-  agent. If it starts and shows nothing for three minutes (a sign-in screen, say), its card says to open its Terminal.
+  sandbox, without `--dangerously-skip-permissions`. They write only in this worktree, temp folders, its own notes and
+  the parts of git's folder a commit needs, and can't read the launch credentials or reach the network.
+  Neither commands nor edits may touch what something outside the sandbox later acts on, without a card: git's hooks,
+  config and metadata pointers, the worktree's `.git`, a hooks folder the repository sets (`core.hooksPath`, as husky
+  does), its `.agents` (`agy`'s own hooks), and `.claude`, `.codex` and `.mcp.json`, which the agent it hands back to
+  would load. Anything else that leaves the sandbox or the worktree is a permission card you answer; once you allow it,
+  Shepherdr answers `agy`'s own prompt for exactly that, going by the prompt `agy` reports in its status, never by
+  reading its screen. Only its plain `shepherdr` commands run outside the sandbox without a card, as they need their
+  core socket (`secret run`, `secret env`, `start` and `stop` are not among them). Pushing goes through `shepherdr pr`.
+  A prompt with no card behind it shows as Needs you, to answer in its Terminal.
+  For the session only, `agy` is told to trust the task's worktree and to wait for no plan review, and these session
+  rules replace any `permissions` in its own settings file. A repository that ships its own `.agents` is not trusted
+  this way: `agy` asks on its own screen and the task needs you, and saying yes there is saved in `agy`'s settings, as
+  it always is. If `agy` isn't installed or signed in, or doesn't offer the chosen model, the agent it would replace
+  keeps running and the task needs you. If it fails after that, the agent has already stopped: the task needs you and
+  its work is kept, and restarting it returns it to that agent. If it starts and shows nothing for three minutes (a
+  sign-in screen, say), its card says to open its Terminal.
 
 - Status comes from native logs/hooks and explicit OSC 7501 reports. Both Claude Code and Codex receive their
   launch-specific hook configuration; personal settings are not changed. A native ended turn with no recorded
