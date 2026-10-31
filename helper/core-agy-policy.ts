@@ -10,7 +10,12 @@ export type AgyCheck =
   | { action: 'ask' }
 
 /** Tools that read the workspace or manage the agent's own session. */
-const WORKSPACE_TOOLS = new Set(['read_file', 'view_file', 'list_dir', 'grep_search', 'find_by_name', 'write_file', 'write_to_file', 'edit_file', 'replace_file_content', 'multi_replace_file_content'])
+const READ_TOOLS = new Set(['read_file', 'view_file', 'list_dir', 'grep_search', 'find_by_name'])
+const WRITE_TOOLS = new Set(['write_file', 'write_to_file', 'edit_file', 'replace_file_content', 'multi_replace_file_content'])
+/** Worktree files that something outside the sandbox acts on: this CLI's own customizations (hooks among them), git's
+ *  pointer to its metadata, and the settings the agent it hands back to loads when it resumes here. */
+export const AGY_CUSTOMIZATIONS = ['.agents', '.agent', '_agents', '_agent']
+export const AGY_PROTECTED = [...AGY_CUSTOMIZATIONS, '.git', '.claude', '.codex', '.mcp.json']
 const OWN_TOOLS = new Set(['command_status', 'send_command_input', 'manage_task', 'task_boundary', 'notify_user'])
 /** Spends allowance out of sight, or asks where the chat can't answer. */
 const REFUSED: Record<string, string> = {
@@ -65,16 +70,20 @@ function ownCommand(line: string, command: string) {
 
 const WORD = '[^;&|`$<>()\\n]'
 /** What this session may do without a prompt, on top of its sandbox and only for this session: its own plain product
- *  commands, and git's own folder so it can commit from a linked worktree, but not git's hooks or config, which run
- *  outside the sandbox later, nor the folder holding this launch's own hooks and settings. */
-export function agySessionSettings(input: { worktree: string; workspace: string; gitDir: string; command: string }) {
+ *  commands, and just the parts of git's folder a commit from a linked worktree writes. Not git's hooks, config or the
+ *  files saying where its metadata is, which programs outside the sandbox act on later; not this launch's own folder or
+ *  the worktree files in AGY_PROTECTED; and not the folder of launch credentials. The worktree is only trusted when it
+ *  ships none of this CLI's customizations: otherwise its own prompt lets the human decide. */
+export function agySessionSettings(input: { worktree: string; workspace: string; gitDir: string; worktreeGitDir: string; sessions: string; command: string; trustWorktree: boolean }) {
   const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
   const words = [...OWN_COMMANDS, `status ${WORD}+`, 'secret list', `secret ask`].join('|')
   return {
-    trustedWorkspaces: [input.worktree, input.workspace], enableTerminalSandbox: true, toolPermission: 'proceed-in-sandbox', artifactReviewPolicy: 'always-proceed', useG1Credits: false,
+    trustedWorkspaces: input.trustWorktree ? [input.worktree, input.workspace] : [input.workspace], enableTerminalSandbox: true, toolPermission: 'proceed-in-sandbox', artifactReviewPolicy: 'always-proceed', useG1Credits: false,
     permissions: {
-      allow: [`command(regex:^(?:${escape(input.command)}|shepherdr) (?:agent )?(?:${words})(?: ${WORD}*)?$)`, `read_file(${input.gitDir})`, `write_file(${input.gitDir})`],
-      deny: [`write_file(${input.workspace})`, `write_file(${input.gitDir}/hooks)`, `write_file(${input.gitDir}/config)`],
+      allow: [`command(regex:^(?:${escape(input.command)}|shepherdr) (?:agent )?(?:${words})(?: ${WORD}*)?$)`, `read_file(${input.gitDir})`,
+        ...['objects', 'refs', 'logs', 'packed-refs'].map(name => `write_file(${input.gitDir}/${name})`), `write_file(${input.worktreeGitDir})`],
+      deny: [`write_file(${input.workspace})`, `read_file(${input.sessions})`, `write_file(${input.gitDir}/hooks)`, `write_file(${input.gitDir}/config)`,
+        ...['commondir', 'gitdir', 'config.worktree'].map(name => `write_file(${input.worktreeGitDir}/${name})`), ...AGY_PROTECTED.map(name => `write_file(${input.worktree}/${name})`)],
     },
   }
 }
@@ -86,6 +95,7 @@ function inside(path: string, folders: string[]) {
     return way === '' || !way.startsWith('..') && !isAbsolute(way)
   })
 }
+const isProtected = (path: string, folders: string[]) => folders.some(folder => AGY_PROTECTED.includes(relative(folder, isAbsolute(path) ? path : resolve(folder, path)).split('/')[0]))
 
 export function agyToolCheck(tool: { name?: unknown; args?: unknown }, workspace: { folders: string[]; command: string }): AgyCheck {
   const name = typeof tool.name === 'string' ? tool.name : ''
@@ -99,9 +109,10 @@ export function agyToolCheck(tool: { name?: unknown; args?: unknown }, workspace
     const leaving = args.BypassSandbox === true || text(args.BypassSandbox) === 'true'
     return leaving ? { action: 'ask' } : { action: 'pass' }
   }
-  if (WORKSPACE_TOOLS.has(name)) {
+  if (READ_TOOLS.has(name) || WRITE_TOOLS.has(name)) {
     const paths = ['Path', 'AbsolutePath', 'TargetFile', 'DirectoryPath', 'SearchPath', 'SearchDirectory', 'File'].map(key => text(args[key])).filter(path => path !== undefined)
-    return paths.length && paths.every(path => inside(path!, workspace.folders)) ? { action: 'pass' } : { action: 'ask' }
+    const allowed = paths.length && paths.every(path => inside(path!, workspace.folders) && !(WRITE_TOOLS.has(name) && isProtected(path!, workspace.folders)))
+    return allowed ? { action: 'pass' } : { action: 'ask' }
   }
   return { action: 'ask' }
 }

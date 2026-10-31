@@ -22,10 +22,10 @@
   for provisioning and the upgrade steps for already-running agents.
 
 - Interactive task, coordinator and backup chat choices require both runtime log discovery and a chat reader.
-- Backup (`task.fallback`) can also be Antigravity (`agy`, Gemini), which only ever runs as a task's backup and hands the task back: see [Tasks](tasks.md). It needs `agy` installed and signed in on the task's machine. Its Model row lists only Gemini models and defaults to its cheapest Flash; its Effort row stays on default, as the model's name says its level. Coordinators have no backup.
   Settings and Restart offer Claude Code, Codex and pi; other herdr CLIs are refused before a chat launch because
   their replies cannot be shown. Existing saved choices are kept, but an unsupported choice must be changed before
   launching again. Headless reviewer choices are separate; this does not add or prove support for other reviewers.
+- Backup (`task.fallback`) can also be Antigravity (`agy`, Gemini), which only ever runs as a task's backup and hands the task back: see [Tasks](tasks.md). It needs `agy` installed and signed in on the task's machine. Its Model row lists only Gemini models and defaults to its cheapest Flash; its Effort row stays on default, as the model's name says its level. Coordinators have no backup.
 
 ## Private instructions
 

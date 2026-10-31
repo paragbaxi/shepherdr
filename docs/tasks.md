@@ -63,7 +63,7 @@
     So on out of allowance or signed out the task stays Working (`Out of allowance · retry in 2m`): Shepherdr reads
     the CLI's live login (`claude auth status`; only a hash is kept), tries the agent again after 90 seconds or as soon
     as the login changes, and takes over only when a further 90 seconds after a failed try bring no new login: about
-    three minutes. A new login that is out too gets its own wait, at most four in a row. A try that never comes back
+    three minutes. A new login that is out too gets its own wait, at most four in a row. A try its CLI never takes
     counts as failed after five minutes. A provider still down after the usual tries takes over at once, as those
     tries already took 15 minutes. Any other error (a full context, a refused request, one nobody recognises) goes to
     you, without spending Gemini.
@@ -71,26 +71,32 @@
     `gemini-3.8-flash-low` unless you choose another; `agy` lists other vendors' models too, which are never offered or
     selected). It gets a short guide instead of the usual ones, works alone and is told to keep its replies short.
     Its AI credits stay off. Google publishes no clear limits for its lowest plan.
-  - *It hands back.* While a task is on it, Shepherdr asks the agent it took over from for one tiny reply (`claude -p`
-    on its smallest model) after 5 minutes, then less and less often up to hourly, and at once when its login changes.
-    Once that works, at the end of Antigravity's turn with nothing open (a permission, a question, a secret request),
-    the task goes back to that agent in the same worktree and branch with all work kept, resuming its own session, and
-    a card says so. This also happens after Antigravity has run out. A task can go to Antigravity again later, but
-    only after its agent finished a turn since coming back, and at most three times: after that it needs you, so the
-    two never go back and forth. Restarting a task that is on Antigravity returns it to its agent.
+  - *It hands back.* While a task is on it, each time a turn of Antigravity's has ended with nothing open (a permission,
+    a question, a secret request), Shepherdr may ask the agent it took over from for one tiny reply, with `claude -p` on
+    the model the task would resume on: after 5 minutes, then less and less often up to hourly, and at once when that
+    CLI's login changes. Once that works the task goes back to that agent in the same worktree and branch with all work
+    kept, resuming its own session, and a card says so. This also happens after Antigravity has run out. A task can go
+    to Antigravity again later, but only after its agent finished a turn since coming back, and at most three times:
+    after that it needs you, so the two never go back and forth. Restarting a task that is on Antigravity returns it
+    to its agent.
 
   On Antigravity the chat works as usual: its replies and steps come from its own transcript, status from its hooks,
   and `shepherdr ask` and other cards still appear. It gets no more than a task agent: commands run in `agy`'s terminal
-  sandbox (this worktree and git's own folder, without git's hooks or config, and no network) and edits stay in the
-  worktree, without `--dangerously-skip-permissions`. Anything that leaves the sandbox or the worktree is a permission
-  card you answer; once you allow it, Shepherdr answers `agy`'s own prompt for exactly that, going by the prompt `agy`
-  reports in its status, never by reading its screen. Only its plain `shepherdr` commands run outside the sandbox
-  without a card, as they need their core socket (`secret run`, `secret env`, `start` and `stop` are not among them).
-  Pushing goes through `shepherdr pr`. A prompt with no card behind it shows as Needs you, to answer in its Terminal.
+  sandbox, without `--dangerously-skip-permissions`. That is this worktree plus the parts of git's folder a commit
+  writes, with no network and not the launch credentials. Neither commands nor edits may touch what something outside
+  the sandbox later acts on, without a card: git's hooks, config and metadata pointers, the worktree's `.git`, its
+  `.agents` (`agy`'s own hooks), and `.claude`, `.codex` and `.mcp.json`, which the agent it hands back to would load.
+  Anything else that leaves the sandbox or the worktree is a permission card you answer; once you allow it, Shepherdr
+  answers `agy`'s own prompt for exactly that, going by the prompt `agy` reports in its status, never by reading its
+  screen. Only its plain `shepherdr` commands run outside the sandbox without a card, as they need their core socket
+  (`secret run`, `secret env`, `start` and `stop` are not among them). Pushing goes through `shepherdr pr`. A prompt with
+  no card behind it shows as Needs you, to answer in its Terminal.
   For the session only, and never saved, `agy` is told to trust the task's worktree and to wait for no plan review, and
-  these session rules replace any `permissions` in its own settings file. If it can't start at all, the agent it would
-  replace keeps running and the task needs you; if it starts and shows nothing for three minutes (a sign-in screen,
-  say), its card says to open its Terminal.
+  these session rules replace any `permissions` in its own settings file. A repository that ships its own `.agents` is
+  not trusted this way: `agy` asks on its own screen and the task needs you. If `agy` isn't installed or signed in, or
+  doesn't offer the chosen model, the agent it would replace keeps running and the task needs you. If it fails after
+  that, the agent has already stopped: the task needs you and its work is kept, and restarting it returns it to that
+  agent. If it starts and shows nothing for three minutes (a sign-in screen, say), its card says to open its Terminal.
 
 - Status comes from native logs/hooks and explicit OSC 7501 reports. Both Claude Code and Codex receive their
   launch-specific hook configuration; personal settings are not changed. A native ended turn with no recorded

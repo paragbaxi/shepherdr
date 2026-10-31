@@ -7,10 +7,10 @@ const WHO: Partial<Record<AgentKind, string[]>> = {
   claude: ['claude', 'auth', 'status', '--json'],
   codex: ['codex', 'login', 'status'],
 }
-/** The smallest real request each CLI can make: its own answer is the only proof its account can work again. */
-const PROBE: Partial<Record<AgentKind, string[]>> = {
-  claude: ['claude', '-p', 'Reply with exactly: OK', '--model', 'haiku', '--no-session-persistence', '--setting-sources', '', '--strict-mcp-config', '--tools', '', '--output-format', 'json'],
-  codex: ['codex', 'exec', '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', 'Reply with exactly: OK'],
+/** A tiny real request: a CLI's own answer is the only proof its account can work again. */
+const PROBE: Partial<Record<AgentKind, (model: string[]) => string[]>> = {
+  claude: model => ['claude', '-p', 'Reply with exactly: OK', ...model, '--no-session-persistence', '--setting-sources', '', '--strict-mcp-config', '--tools', '', '--output-format', 'json'],
+  codex: model => ['codex', 'exec', ...model, '--ephemeral', '--skip-git-repo-check', '--sandbox', 'read-only', 'Reply with exactly: OK'],
 }
 const FRESH = 15_000
 
@@ -32,11 +32,12 @@ export class CoreProviderLogin {
     this.seen.set(key, { at: now, mark })
     return mark
   }
-  /** True only on a clear answer. A failure of any kind says it can't go on yet. */
-  async available(machine: string, kind: AgentKind) {
+  /** True only on a clear answer from the model the task would resume on: one model's limit can outlast another's. A
+   *  failure of any kind says it can't go on yet. */
+  async available(machine: string, kind: AgentKind, model?: string) {
     if (!PROBE[kind]) return false
     try {
-      const text = (await this.files.exec(machine, PROBE[kind]!, undefined, undefined, 90)).toString('utf8')
+      const text = (await this.files.exec(machine, PROBE[kind]!(model ? ['--model', model] : []), undefined, undefined, 90)).toString('utf8')
       if (kind !== 'claude') return true
       return JSON.parse(text).is_error === false
     } catch { return false }

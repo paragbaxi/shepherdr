@@ -200,7 +200,7 @@ export class CoreSettings {
         if (row.key.endsWith('.model')) {
           dynamic = { ...dynamic, text: !catalog.models.length, options: [...(role === 'autopilot' ? ['inherit'] : []), 'default', ...catalog.models.map(model => model.label)] }
           value = this.findModel(config.kind, picked.value, level)?.label ?? picked.value
-          if (picked.value !== 'inherit' && picked.value !== 'default' && picked.value && !config.model) dynamic.warn = 'This model is unavailable for the selected agent. New starts use its default; choose a model or reset this value.'
+          if (picked.value !== 'inherit' && picked.value !== 'default' && picked.value && (!config.model || config.kind === 'agy' && !this.findModel(config.kind, picked.value, level))) dynamic.warn = 'This model is unavailable for the selected agent. New starts use its default; choose a model or reset this value.'
         }
         else dynamic = { ...dynamic, options: [...(role === 'autopilot' ? ['inherit'] : []), 'default', ...(catalog.models.find(model => model.id === config.model)?.efforts ?? catalog.efforts)] }
       }

@@ -7,7 +7,9 @@ const WINDOW = 60_000
 /** What Antigravity's own prompt will name for this tool call: the start of its first line, which its status keeps. */
 export function agyPromptWords(input: unknown) {
   const args = input && typeof input === 'object' ? input as Record<string, unknown> : {}
-  const raw = ['CommandLine', 'Path', 'AbsolutePath', 'TargetFile', 'Url'].map(key => args[key]).find(value => typeof value === 'string') as string | undefined
+  const found = ['CommandLine', 'Path', 'AbsolutePath', 'TargetFile', 'Url'].map(key => args[key]).find(value => typeof value === 'string') as string | undefined
+  let raw = found
+  try { const parsed = found?.startsWith('"') ? JSON.parse(found) : found; if (typeof parsed === 'string') raw = parsed } catch { /* Its plain words, then. */ }
   return raw?.split('\n')[0].trim().slice(0, 40) ?? ''
 }
 

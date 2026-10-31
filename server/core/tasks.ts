@@ -358,15 +358,19 @@ export class CoreTasks {
         return true
       } catch (error) {
         takeover.state = 'failed'; task.startError = `${CLI_NAME[takeover.from]} could not start again. Existing work was kept; restart this task explicitly.`; this.save(task)
+        const card = `provider-return-failed-${task.id}-${takeover.at}`
+        this.source.post(task.chat, { id: card, who: 'agent', card: { id: card, text: task.startError }, at: Date.now() })
+        this.source.emit('alert', { id: card, from: 'Shepherdr', title: `${task.id} could not go back`, body: task.startError, go: { place: task.place, task: task.id, focus: card }, task: true })
         throw error
       }
     })
   }
-  /** It was told to start and never said it did. Only the human can see why (a sign-in screen, say). */
-  async providerStalled(id: string, launch: string) {
+  /** It was told to start and never said it did. Only the human can see why (a sign-in screen, say). Until it starts. */
+  async providerStalled(id: string, launch: string, stalled: boolean) {
     return this.change(id, async () => {
       const task = this.get(id), agent = task && this.source.agents.get(task.chat)
-      if (!task || agent?.launch !== launch || agent.state !== 'starting') return
+      if (!task || agent?.launch !== launch) return
+      if (!stalled) { delete task.startError; this.save(task); return }
       task.startError = `${CLI_NAME[agent.kind]} did not start. Open its Terminal, or restart this task.`; this.save(task)
       const card = `provider-stalled-${launch}`
       this.source.post(task.chat, { id: card, who: 'agent', card: { id: card, text: task.startError }, at: Date.now() })
@@ -677,7 +681,7 @@ export class CoreTasks {
         if (terminal?.state === 'live') await this.source.core.call('terminal.interrupt', { terminal: terminal.address })
         await this.source.browsers?.close(task.id)
         task.workflow = 'todo'; delete task.reservedAt; this.save(task); await this.label(task); return { ok: true }
-      case 'restart-info': return { ok: true, info: { role: 'task', space: this.source.space(task.place)?.name, on: { kind: agent?.kind ?? task.kind, model: agent?.model, effort: agent?.effort, speed: agent?.speed }, onKnown: !!agent,
+      case 'restart-info': return { ok: true, info: { role: 'task', space: this.source.space(task.place)?.name, on: task.kind === 'agy' && task.providerTakeover ? { kind: task.providerTakeover.from, model: task.providerTakeover.back?.model, effort: task.providerTakeover.back?.effort, speed: task.speed } : { kind: agent?.kind ?? task.kind, model: agent?.model, effort: agent?.effort, speed: agent?.speed }, onKnown: !!agent,
         onWords: agent?.kind ?? task.kind, want: this.source.settings.agent('task', task.place), working: agent?.state === 'working',
         clis: this.source.settings.clis(task.place) } }
       case 'restart':
@@ -694,7 +698,7 @@ export class CoreTasks {
           : this.source.settings.checkedAgent(task.place, { kind: action.kind || task.kind, model: action.model, effort: action.effort })
         const speed = pickSpeed(action.speed, task.speed)
         if (agent) await this.finishForRestart(agent)
-        if (onBackup && takeover) { takeover.state = 'returned'; delete takeover.handover }
+        if (onBackup && takeover) { takeover.state = choice.kind === takeover.from ? 'returning' : 'returned'; delete takeover.handover }
         await this.profile(task, profile)
         await this.source.browsers?.close(task.id)
         task.kind = choice.kind; task.model = choice.model; task.effort = choice.effort; task.speed = speed

@@ -21,6 +21,10 @@ export function agyUserText(content: unknown) {
   return start === 0 && end >= 0 ? content.slice(open.length, end) : content
 }
 
+/** Its words for an allowance that is gone, said here so no other CLI's errors read differently. Limits per minute it
+ *  has already retried itself pass by themselves too, so those stay as they are. */
+export const agyErrorCode = (text: string) => /resource.?exhausted|exhausted your|quota/i.test(text) && !/per.?minute|rate.?limit/i.test(text) ? 'usage_limit_exceeded' : undefined
+
 function agyStep(name: string, args: Json): Said {
   const path = String(value(args?.Path) ?? value(args?.AbsolutePath) ?? value(args?.TargetFile) ?? value(args?.File) ?? '')
   const file = path ? baseName(path) : ''
@@ -61,7 +65,7 @@ export class AgyReader implements Reader {
         if (line.source !== 'USER_EXPLICIT') continue
         out.push({ kind: 'turn-start', id: `${id}-turn`, at }, { kind: 'user', id, at, text: agyUserText(line.content) })
       } else if (line.type === 'ERROR_MESSAGE' || line.type === 'PLANNER_RESPONSE' && line.status === 'ERROR') {
-        out.push({ kind: 'error', id, at, text: stopped || 'Provider error' }, { kind: 'turn-end', id: `${id}-end`, at })
+        out.push({ kind: 'error', id, at, text: stopped || 'Provider error', code: agyErrorCode(stopped || '') }, { kind: 'turn-end', id: `${id}-end`, at })
       } else if (line.type === 'PLANNER_RESPONSE') {
         if (line.status !== 'DONE') continue
         const tokens = [line.input_tokens, line.cache_read_tokens, line.output_tokens].reduce((sum: number, part: unknown) => sum + (Number.isSafeInteger(part) ? part as number : 0), 0)

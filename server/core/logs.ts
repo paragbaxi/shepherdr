@@ -1,6 +1,6 @@
 import { ClaudeReader } from '../common/readers/claude.ts'
 import { CodexReader } from '../common/readers/codex.ts'
-import { AgyReader } from '../common/readers/agy.ts'
+import { AgyReader, agyErrorCode } from '../common/readers/agy.ts'
 import type { LogEvent, Reader } from '../common/readers/types.ts'
 import type { Message } from '../../shared/types.ts'
 import type { CoreAgents } from './agents.ts'
@@ -129,7 +129,7 @@ export class CoreLogs {
     if (stop.launch !== agent.launch) return
     const events = this.store.all<LogEvent>(`event:${agent.chat}`).filter(event => event.at >= agent.started).sort((a, b) => a.at - b.at)
     if (events.findLast(event => event.kind === 'error' || event.kind === 'turn-start' || event.kind === 'user')?.kind === 'error') return
-    this.apply(agent, { kind: 'error', id: `stop-${stop.id}`, at: stop.at, text: stop.text })
+    this.apply(agent, { kind: 'error', id: `stop-${stop.id}`, at: stop.at, text: stop.text, code: agyErrorCode(stop.text) })
     this.apply(agent, { kind: 'turn-end', id: `stop-${stop.id}-end`, at: stop.at })
     this.changed(agent.chat)
   }

@@ -279,10 +279,7 @@ function handOver(f: ReturnType<typeof setup>) {
   const internals = f.source.tasks as unknown as { finishForRestart(agent: CoreAgent): Promise<void>; label(task: CoreTask): Promise<void>; seedIncludes(task: CoreTask): Promise<void> }
   internals.finishForRestart = async () => { live = '' }
   internals.label = async () => {}
-  f.source.core.call = (async (method: string, params: { argv?: string[] }) => {
-    if (method === 'machine.exec' && params.argv?.[0] === 'agy') return { stdout: Buffer.from('gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\nclaude-opus-5-5-low\tClaude\n').toString('base64'), stderr: '', code: 0, timed_out: false, truncated: false }
-    throw new Error(`unexpected ${method}`)
-  }) as typeof f.source.core.call
+  f.source.files.exec = (async (_machine: string, argv: string[]) => Buffer.from(argv[0] === 'agy' ? 'gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\nclaude-opus-5-5-low\tClaude\n' : '')) as typeof f.source.files.exec
   return { launches, agent: () => f.source.agents.get(f.agent.chat)! }
 }
 const cards = (f: ReturnType<typeof setup>) => f.source.logs.messages(f.agent.chat).filter(message => message.card).map(message => message.card!.text)
@@ -298,22 +295,34 @@ test('Antigravity takes over on Gemini only and hands back at the end of a turn,
   expect(saved.providerTakeover).toMatchObject({ state: 'started', from: 'claude', to: 'agy', count: 1, back: { model: 'claude-opus-5-5', effort: 'high', session: 'claude-session' } })
   expect(cards(f).at(-1)).toContain('Antigravity took over from Claude Code')
 
-  // Nothing is handed back while Claude can't, nor mid-turn once it can.
-  f.source.providerLogin.available = async () => true
+  // Nothing is handed back mid-turn, and the check isn't even made then.
+  const asked: (string | undefined)[] = []
+  let ok = false
+  f.source.providerLogin.available = async (_machine, _kind, model) => { asked.push(model); return ok }
   f.turn({ complete: false })
   const at = saved.providerTakeover!.at
   await f.source.providerReturns.tick(at + 1)
   await f.source.providerReturns.tick(at + 6 * 60_000)
+  expect(asked).toEqual([])
   expect(run.launches).toHaveLength(1)
+  // At the end of a turn it asks about the model it would resume on, and backs off while that can't go on.
   f.turn({ complete: true })
   await f.source.providerReturns.tick(at + 6 * 60_000 + 1)
+  expect(asked).toEqual(['claude-opus-5-5'])
+  await f.source.providerReturns.tick(at + 6 * 60_000 + 2)
+  expect(asked).toHaveLength(1)
+  expect(run.launches).toHaveLength(1)
+  // A changed login is worth asking again at once.
+  ok = true
+  f.source.providerLogin.mark = async () => 'another'
+  await f.source.providerReturns.tick(at + 6 * 60_000 + 3)
   expect(run.launches[1]).toMatchObject({ kind: 'claude', model: 'claude-opus-5-5', session: 'claude-session', resume: true })
   expect(run.launches[1].prompt).toContain('Work so far')
   saved = f.source.tasks.get(f.task.id)!
   expect(saved).toMatchObject({ kind: 'claude', model: 'claude-opus-5-5', effort: 'high', branch: 'work/one', folder: '/work/one' })
   expect(saved.providerTakeover).toMatchObject({ state: 'returned' })
   expect(cards(f).at(-1)).toContain('Claude Code is back and took over from Antigravity')
-  await f.source.providerReturns.tick(at + 6 * 60_000 + 2)
+  await f.source.providerReturns.tick(at + 6 * 60_000 + 4)
   expect(run.launches).toHaveLength(2)
 }))
 
@@ -339,7 +348,7 @@ test('no loop: a task that returned goes to Antigravity again only after real wo
 test('if Antigravity is missing, the task keeps its agent and needs the human; if it runs out too, it never loops', () => fixture(async f => {
   await onAntigravity(f)
   const run = handOver(f)
-  f.source.core.call = (async () => { throw new Error('agy: command not found') }) as typeof f.source.core.call
+  f.source.files.exec = (async () => { throw new Error('agy: command not found') }) as typeof f.source.files.exec
   await expect(f.source.tasks.providerFallback(f.task.id, f.agent.launch, 'Out of allowance')).rejects.toThrow('not installed or not signed in')
   expect(run.launches).toHaveLength(0)
   expect(f.source.tasks.get(f.task.id)).toMatchObject({ kind: 'claude' })

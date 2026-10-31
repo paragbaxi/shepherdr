@@ -16,7 +16,7 @@ import type { CoreSettings } from './settings.ts'
 import { CorePilotRepositories } from './pilot-repositories.ts'
 import type { PilotPrepared, PilotLaunch } from '../../helper/core-pilot-launch.ts'
 import { isGemini } from '../../shared/models.ts'
-import { agySessionSettings } from '../../helper/core-agy-policy.ts'
+import { AGY_CUSTOMIZATIONS, agySessionSettings } from '../../helper/core-agy-policy.ts'
 
 const EVENTS = ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd', 'PermissionRequest', 'PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'Notification', 'SubagentStart', 'SubagentStop']
 const quote = (value: string) => `'${value.replace(/'/g, `'"'"'`)}'`
@@ -153,12 +153,12 @@ export class CoreAgents {
       // Its commands start in the first workspace folder by name: this name sorts after every worktree.
       const worktree = options.folder ?? space.folder, workspace = join(`${await this.worktreeRoot(space.machine)}_agy`, grant.id), sessionSettings = join(workspace, 'settings.json')
       const handler = (event: string, timeout = 5) => ({ type: 'command', command: `${quote(remote?.bun ?? process.execPath)} ${quote(join(root, 'helper/core-agy-hook.ts'))} ${event} ${quote(worktree)}`, timeout })
-      const gitDir = (await this.files.exec(space.machine, ['git', '-C', worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir'])).toString('utf8').trim()
+      const [gitDir, worktreeGitDir] = (await this.files.exec(space.machine, ['git', '-C', worktree, 'rev-parse', '--path-format=absolute', '--git-common-dir', '--absolute-git-dir'])).toString('utf8').trim().split('\n')
+      const trustWorktree = await this.files.exec(space.machine, ['sh', '-c', 'for name in "$@"; do [ -e "$name" ] && exit 1; done; exit 0', 'sh', ...AGY_CUSTOMIZATIONS], worktree).then(() => true, () => false)
       await this.files.exec(space.machine, ['mkdir', '-p', '-m', '700', dirname(workspace), workspace, join(workspace, '.agents')])
       await privateFile(join(workspace, '.agents/hooks.json'), JSON.stringify({ shepherdr: { SessionStart: [handler('SessionStart')], PreInvocation: [handler('PreInvocation')], Stop: [handler('Stop')], PreToolUse: [{ matcher: '*', hooks: [handler('PreToolUse', 3600)] }] } }))
-      // For this session only, never saved. Trust covers this task's worktree, where its agent was already working, and
-      // the folder above. Commands stay in its terminal sandbox, plans wait for no screen, and paid credits stay off.
-      await privateFile(sessionSettings, JSON.stringify(agySessionSettings({ worktree, workspace, gitDir, command: join(root, 'bin/shepherdr') })))
+      // For this session only, never saved. Commands stay in its terminal sandbox, plans wait for no screen, paid credits stay off.
+      await privateFile(sessionSettings, JSON.stringify(agySessionSettings({ worktree, workspace, gitDir, worktreeGitDir, sessions: directory, command: join(root, 'bin/shepherdr'), trustWorktree })))
       argv.push('--add-dir', workspace, '--settings', sessionSettings, '--mode', 'accept-edits', '--sandbox', '--model', options.model!)
       if (record.session) argv.push('--conversation', record.session)
     } else {

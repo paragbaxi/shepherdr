@@ -1,5 +1,5 @@
 import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { CORE_VERSION } from './protocol.ts'
 import type { CoreFiles } from './files.ts'
@@ -79,7 +79,8 @@ export class CoreRemotes {
     } finally { await this.files.exec(machine, ['rm', '-f', temp]).catch(() => {}) }
   }
   async privateFile(machine: string, runtime: RemoteRuntime, path: string, text: string) {
-    if (!path.startsWith(runtime.root + '/sessions/')) throw new Error('Private launch file is outside its runtime')
+    // Antigravity's per-launch folder sits beside the worktrees so it sorts after them (agents.ts).
+    if (!path.startsWith(runtime.root + '/sessions/') && !path.startsWith(dirname(runtime.root) + '/worktrees_agy/')) throw new Error('Private launch file is outside its runtime')
     const script = `const f=require('node:fs'),p=require('node:path');const name=process.argv.at(-1),dir=p.dirname(name);f.mkdirSync(dir,{recursive:true,mode:0o700});const s=f.lstatSync(dir);if(!s.isDirectory()||s.isSymbolicLink()||s.uid!==process.getuid()||(s.mode&0o077)||f.realpathSync(dir)!==dir)throw Error('Launch directory is not private');f.writeFileSync(name,await Bun.stdin.text(),{mode:0o600,flag:'wx'})`
     await this.files.exec(machine, [runtime.bun, '-e', script, '--', path], undefined, Buffer.from(text))
   }
