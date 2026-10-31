@@ -32,6 +32,8 @@ const CLAUDE_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 const PI_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
 const claude = (id: string, label: string, effort: string): Model => ({ id, label, efforts: CLAUDE_LEVELS, effort })
 const codex = (id: string, label: string, effort: string, ultra = true): Model => ({ id, label, efforts: [...CLAUDE_LEVELS, ...(ultra ? ['ultra'] : [])], effort })
+/** Antigravity's ids name their level (gemini-3.8-flash-low), so no separate effort is ever passed. */
+const agy = (id: string, label: string): Model => ({ id, label, efforts: [] })
 
 /** what each CLI takes when it can't be asked (kept up to date by hand; the CLI's own answer wins) */
 export const TABLE: Record<string, CliModels> = {
@@ -46,6 +48,18 @@ export const TABLE: Record<string, CliModels> = {
   },
   // pi reaches many providers' models: only pi itself can list them
   pi: { models: [], efforts: PI_LEVELS },
+  // Backup only, and its smallest model unless the human picks another: its allowance is the scarce thing here.
+  agy: { models: [agy('gemini-3.8-flash-low', 'Gemini 3.8 Flash (Low)'), agy('gemini-3.8-flash-medium', 'Gemini 3.8 Flash (Medium)')], efforts: [], default: 'gemini-3.8-flash-low' },
+}
+
+/** Antigravity also lists other vendors' models. Shepherdr only ever selects Gemini ones. */
+export const isGemini = (id: unknown): id is string => typeof id === 'string' && /^gemini-[\w.-]+$/.test(id)
+/** `agy models`: an id, a tab and a label per line. Its default is its cheapest Flash, never what agy itself would pick. */
+export function parseAgy(text: string): CliModels | undefined {
+  const models = text.split('\n').map(line => line.split('\t')).filter(([id, label]) => isGemini(id?.trim()) && label?.trim()).map(([id, label]) => agy(id.trim(), label.trim()))
+  if (!models.length) return undefined
+  const flash = (level: string) => models.find(model => new RegExp(`flash.*-${level}$`).test(model.id))
+  return { models, efforts: [], default: (flash('low') ?? flash('medium'))?.id ?? TABLE.agy.default }
 }
 
 /** Claude Code's families as its /model menu offers them, newest of each; its aliases (opus, haiku) name these too */

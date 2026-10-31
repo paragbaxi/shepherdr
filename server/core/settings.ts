@@ -1,5 +1,5 @@
 import type { SettingRow, SettingSection, RestartCli } from '../../shared/types.ts'
-import { TABLE, nearest, parseCodex, type CliModels } from '../../shared/models.ts'
+import { TABLE, nearest, parseAgy, parseCodex, type CliModels } from '../../shared/models.ts'
 import type { CoreStore } from './store.ts'
 import type { CoreFiles } from './files.ts'
 import type { MachineLimits } from '../health.ts'
@@ -10,9 +10,13 @@ import type { AgentKind, CoreSpace } from './model.ts'
 import { NOTIFY, NOTIFY_DEFAULT, NOTIFY_KEY } from '../../shared/alerts.ts'
 
 export type Role = 'coordinator' | 'task' | 'reviewer' | 'backup'
-export const CLI_NAME = { claude: 'Claude Code', codex: 'Codex' }
-const names = CLI_NAME
-export const kindOf = (word: string): AgentKind | undefined => Object.entries(names).find(([kind, name]) => [kind, name.toLowerCase()].includes(word.trim().toLowerCase()))?.[0] as AgentKind | undefined
+export const CLI_NAME: Record<AgentKind, string> = { claude: 'Claude Code', codex: 'Codex', agy: 'Antigravity' }
+/** What a task, coordinator, reviewer or Autopilot run can be started on. */
+const names = { claude: CLI_NAME.claude, codex: CLI_NAME.codex }
+const named = (word: string, from: Record<string, string>) => Object.entries(from).find(([kind, name]) => [kind, name.toLowerCase()].includes(word.trim().toLowerCase()))?.[0] as AgentKind | undefined
+export const kindOf = (word: string) => named(word, names)
+/** The Backup setting alone also takes Antigravity. */
+export const backupKindOf = (word: string) => named(word, CLI_NAME)
 const roleRows = (role: Role, group: string): SettingRow[] => [
   { group, key: `${role}.agent`, label: 'Agent', value: role === 'reviewer' ? 'Codex' : 'Claude Code', options: Object.values(names) },
   { group, key: `${role}.model`, label: 'Model', value: 'default', text: true },
@@ -50,8 +54,8 @@ const CATALOG: SettingSection[] = [
     { key: 'brief.merge', label: 'Merge', value: 'on its own', options: ['on its own', 'after GitHub checks', 'ask me first'] },
     ...roleRows('reviewer', 'Reviewer'),
   ] },
-  { name: 'Agents', about: "What each kind of agent starts with. Default is the agent's own model or effort. Backup takes a task over when its agent can't go on. Chat choices need a chat log reader; other installed CLIs cannot show replies here. Headless review is separate.", rows: [...roleRows('task', 'Tasks'), ...roleRows('coordinator', 'Coordinators'),
-    { group: 'Backup', key: 'task.fallback', label: 'Agent', value: 'Codex', options: ['off', ...Object.values(names)] },
+  { name: 'Agents', about: "What each kind of agent starts with. Default is the agent's own model or effort. Backup takes a task over when its agent can't go on; coordinators have no backup. Antigravity runs Gemini only as a backup, on its cheapest Flash model unless you pick another, and hands the task back once its agent can go on again. Chat choices need a chat log reader; other installed CLIs cannot show replies here. Headless review is separate.", rows: [...roleRows('task', 'Tasks'), ...roleRows('coordinator', 'Coordinators'),
+    { group: 'Backup', key: 'task.fallback', label: 'Agent', value: 'Codex', options: ['off', ...Object.values(CLI_NAME)] },
     { group: 'Backup', key: 'backup.model', label: 'Model', value: 'default', text: true },
     { group: 'Backup', key: 'backup.effort', label: 'Effort', value: 'default', options: ['default', ...TABLE.codex.efforts] },
     ] },
@@ -101,9 +105,9 @@ export class CoreSettings {
         if (this.catalog(kind, level).models.length && !this.findModel(kind, value, level)) throw new Error('Choose a model offered by this agent')
       }
       if (key.endsWith('.agent') || key === 'task.fallback' && value.toLowerCase() !== 'off') {
-        const kind = kindOf(value)
-        if (!kind && !(key === 'autopilot.agent' && value === 'inherit')) throw new Error('Choose Claude Code or Codex')
-        if (kind) value = names[kind]
+        const backup = key === 'task.fallback', kind = backup ? backupKindOf(value) : kindOf(value)
+        if (!kind && !(key === 'autopilot.agent' && value === 'inherit')) throw new Error(backup ? 'Choose Claude Code, Codex or Antigravity' : 'Choose Claude Code or Codex')
+        if (kind) value = CLI_NAME[kind]
       } else if (key === 'task.fallback' && value.toLowerCase() === 'off') value = 'off'
       else if (row.num) {
         if ((row.num.off || row.num.zero) && value === 'off') value = 'off'
@@ -131,9 +135,11 @@ export class CoreSettings {
       const effort = this.get('autopilot.effort', level)
       return { kind, model, effort: effort === 'inherit' ? base.effort : effort === 'default' ? undefined : effort }
     }
-    const kind = kindOf(this.get(role === 'backup' ? 'task.fallback' : `${role}.agent`, level)) ?? (role === 'reviewer' || role === 'backup' ? 'codex' : 'claude')
+    const kind = (role === 'backup' ? backupKindOf(this.get('task.fallback', level)) : kindOf(this.get(`${role}.agent`, level))) ?? (role === 'reviewer' || role === 'backup' ? 'codex' : 'claude')
     const raw = this.get(`${role}.model`, level), catalog = this.catalog(kind, level)
     const model = raw === 'default' || !raw ? undefined : this.findModel(kind, raw, level)?.id ?? (!catalog.models.length ? raw : undefined)
+    // Antigravity's own default is a larger model than a backup should spend: it always gets one named here.
+    if (kind === 'agy') return { kind, model: model ?? catalog.default ?? TABLE.agy.default, effort: undefined }
     const effort = nearest(catalog.models.find(item => item.id === model)?.efforts ?? catalog.efforts, this.get(`${role}.effort`, level))
     return { kind, model, effort }
   }
@@ -215,13 +221,19 @@ export class CoreSettings {
   }
   /** Query the CLI on its own machine, through core only. No app startup dependency. */
   probe(machine: string) {
-    if (this.probing.has(machine)) return
-    const saved = this.store.get<CliModels>('models', `${machine}:codex`)
+    this.probeOne(machine, 'codex', ['codex', 'debug', 'models'], parseCodex)
+    // Only once it is someone's backup: until then Antigravity stays untouched, listing models included.
+    if (['all', `m:${machine}`, ...this.spaces().filter(space => space.machine === machine).map(space => space.id)].some(level => backupKindOf(this.get('task.fallback', level)) === 'agy')) this.probeOne(machine, 'agy', ['agy', 'models'], parseAgy)
+  }
+  private probeOne(machine: string, kind: AgentKind, argv: string[], parse: (text: string) => CliModels | undefined) {
+    const key = `${machine}:${kind}`
+    if (this.probing.has(key)) return
+    const saved = this.store.get<CliModels>('models', key)
     if (saved?.at && Date.now() - saved.at < 6 * 3_600_000) return
-    this.probing.add(machine)
-    void this.files.exec(machine, ['codex', 'debug', 'models'], undefined, undefined, 20).then(bytes => {
-      const catalog = parseCodex(bytes.toString('utf8'))
-      if (catalog) { this.store.set('models', `${machine}:codex`, { ...catalog, at: Date.now() }); this.changed() }
-    }).catch(() => {}).finally(() => this.probing.delete(machine))
+    this.probing.add(key)
+    void this.files.exec(machine, argv, undefined, undefined, 20).then(bytes => {
+      const catalog = parse(bytes.toString('utf8'))
+      if (catalog) { this.store.set('models', key, { ...catalog, at: Date.now() }); this.changed() }
+    }).catch(() => {}).finally(() => this.probing.delete(key))
   }
 }

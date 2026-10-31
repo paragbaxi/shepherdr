@@ -29,6 +29,8 @@ import { CoreError } from './client.ts'
 import { CLI_NAME, CoreSettings } from './settings.ts'
 import { CoreSecrets } from './secrets.ts'
 import { CoreProviderRetries } from './provider-retries.ts'
+import { CoreProviderReturns } from './provider-returns.ts'
+import { CoreProviderLogin } from './provider-login.ts'
 import { CoreArtifacts } from './artifacts.ts'
 import { CoreChat } from './chat.ts'
 import { CoreActivity } from './activity.ts'
@@ -83,6 +85,8 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
   pushWarnings: () => string[] = () => []
   readonly secrets: CoreSecrets
   readonly providerRetries: CoreProviderRetries
+  readonly providerReturns: CoreProviderReturns
+  readonly providerLogin: CoreProviderLogin
   readonly artifacts: CoreArtifacts
   readonly chats: CoreChat
   readonly activities: CoreActivity
@@ -121,6 +125,8 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
     this.cards = new CoreCards(this)
     this.secrets = new CoreSecrets(this)
     this.providerRetries = new CoreProviderRetries(this)
+    this.providerLogin = new CoreProviderLogin(this.files)
+    this.providerReturns = new CoreProviderReturns(this)
     this.artifacts = new CoreArtifacts(this, installation.id)
     this.chats = new CoreChat(this, installation.id)
     this.activities = new CoreActivity(this)
@@ -160,6 +166,7 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
       if (!this.quiescing) void this.pilots.lifecycle.tick().then(() => this.pilots.completion.tick()).catch(error => this.faults.set('pilot-lifecycle', error.message))
       if (!this.quiescing) { this.pilots.wakes.tick(); this.news.deliver() }
       if (!this.quiescing) void this.providerRetries.tick().catch(error => this.faults.set('provider-retry', error.message))
+      if (!this.quiescing) void this.providerReturns.tick().catch(error => this.faults.set('provider-return', error.message))
       if (!this.quiescing) void this.pilots.usage.poll().catch(error => this.faults.set('pilot-usage', error.message))
       if (this.connected()) { void this.refresh().then(() => this.mailbox.resync()).catch(error => this.faults.set('core', error.message)); void this.tasks.tick().catch(error => this.faults.set('queue', error.message)); return }
       if (this.recovering || this.core.current.error?.includes('requires core')) return
@@ -613,7 +620,7 @@ Use hc for starting, messaging and waiting on core child agents. Never use a web
     const previous = this.store.get<Permission>('permission', input.id)
     if (previous && (previous.grant !== grant.id || previous.chat !== grant.chat)) throw new Error('Permission id belongs to another session')
     if (previous?.settled) return { allow: previous.allow === true }
-    const question: Question = { id: input.id, title: `${agent.kind === 'claude' ? 'Claude Code' : 'Codex'} asks to use ${String(input.tool || 'a tool').slice(0, 100)}`,
+    const question: Question = { id: input.id, title: `${CLI_NAME[agent.kind]} asks to use ${String(input.tool || 'a tool').slice(0, 100)}`,
       kind: 'Question', choices: [{ label: 'Allow once' }, { label: 'Deny' }], to: grant.chat, noNote: true,
       screen: JSON.stringify(input.input, null, 2)?.slice(0, 16_000) }
     const permission: Permission = { id: input.id, chat: grant.chat, grant: grant.id, question, expires: request.expires }

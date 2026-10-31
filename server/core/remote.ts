@@ -9,6 +9,7 @@ export interface RemoteRuntime { root: string; home: string; bun: string; hc: st
 const PARTS = ['helper/core-worktree-includes.ts', 'helper/core-worktree-move.ts', 'helper/core-cli.ts', 'helper/core-hook.ts', 'helper/core-review.ts', 'helper/core-secret.ts', 'helper/core-browser.ts', 'helper/core-browser-session.ts', 'server/browser-pick.ts', 'shared/browser.ts', 'server/core/browser-protocol.ts', 'server/core/home.ts', 'server/core/client.ts', 'server/core/protocol.ts', 'server/core/envelope.ts', 'server/core/mailbox.ts', 'server/core/request.ts']
 PARTS.push(...['artifact', 'inventory', 'native', 'path', 'ssh', 'git', 'backend', 'bootstrap', 'capture', 'cli', 'gateway', 'home', 'hook', 'launch', 'proxy', 'records', 'runtime', 'sandbox', 'tls'].map(name => `helper/core-pilot-${name}.ts`))
 const quote = (text: string) => `'${text.replace(/'/g, `'"'"'`)}'`
+PARTS.push('helper/core-agy-hook.ts', 'helper/core-agy-policy.ts')
 
 /** Provision only private agent helper files through core exec. No SSH client, listener, worker or service. */
 export class CoreRemotes {

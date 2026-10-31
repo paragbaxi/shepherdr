@@ -55,7 +55,39 @@
   **backup agent** takes over, once: Settings → Agents → Backup (`task.fallback`, Codex unless set, or off).
   It starts in the same worktree and branch, on its CLI's own model, with the brief and a short handover: who it takes
   over from and why, the branch's commits, what lies uncommitted and the chat so far. A card in the task's chat says
-  so. Contained Autopilot tasks keep their selected run policy and never switch provider automatically. If the backup can't go on either, or isn't installed, the task needs you.
+  so. Contained Autopilot tasks keep their selected run policy and never switch provider automatically. If the backup can't go on either, or isn't installed, the task needs you. Coordinators have no backup: a coordinator cut off says so in its chat, with an alert.
+- **Antigravity as the backup** (Gemini, through Google's `agy` CLI) is for a small allowance you want left alone in
+  normal use. It can only be a backup: no task, coordinator, reviewer or Autopilot run starts on it, and a review stays
+  with the task's reviewer. Three things differ from another backup:
+  - *It waits for the login.* An account may be swapped for another with no restart, which clears a limit by itself.
+    So on out of allowance or signed out the task stays Working (`Out of allowance · retry in 2m`): Shepherdr reads
+    the CLI's live login (`claude auth status`; only a hash is kept), tries the agent again after 90 seconds or as soon
+    as the login changes, and takes over only when a further 90 seconds after a failed try bring no new login: about
+    three minutes. A new login that is out too gets its own wait, at most four in a row. A try that never comes back
+    counts as failed after five minutes. A provider still down after the usual tries takes over at once, as those
+    tries already took 15 minutes. Any other error (a full context, a refused request, one nobody recognises) goes to
+    you, without spending Gemini.
+  - *It spends little.* It always runs a Gemini model named by Shepherdr (Settings → Agents → Backup → Model:
+    `gemini-3.8-flash-low` unless you choose another; `agy` lists other vendors' models too, which are never offered or
+    selected). It gets a short guide instead of the usual ones, works alone and is told to keep its replies short.
+    Its AI credits stay off. Google publishes no clear limits for its lowest plan.
+  - *It hands back.* While a task is on it, Shepherdr asks the agent it took over from for one tiny reply (`claude -p`
+    on its smallest model) after 5 minutes, then less and less often up to hourly, and at once when its login changes.
+    Once that works, at the end of Antigravity's turn with nothing open (a permission, a question, a secret request),
+    the task goes back to that agent in the same worktree and branch with all work kept, resuming its own session, and
+    a card says so. This also happens after Antigravity has run out. A task can go to Antigravity again later, but
+    only after its agent finished a turn since coming back, and at most three times: after that it needs you, so the
+    two never go back and forth. Restarting a task that is on Antigravity returns it to its agent.
+
+  On Antigravity the chat works as usual: its replies and steps come from its own transcript, status from its hooks,
+  and `shepherdr ask` and other cards still appear. It gets no more than a task agent: commands run in `agy`'s terminal
+  sandbox (this worktree, no network) and edits stay in the worktree, without `--dangerously-skip-permissions`. Anything
+  that leaves the sandbox or the worktree is a permission card you answer, except its own plain `shepherdr` commands,
+  which need their core socket (`secret run`, `secret env`, `start` and `stop` are not among them). So a backup that
+  needs `git commit` in a linked worktree may wait for your yes. For the session only, and never saved, `agy` is told to
+  trust the task's worktree and to wait for no plan review. If it can't start at all, the agent it would replace keeps
+  running and the task needs you; if it starts and shows nothing for three minutes (a sign-in screen, say), its card
+  says to open its Terminal.
 - Status comes from native logs/hooks and explicit OSC 7501 reports. Both Claude Code and Codex receive their
   launch-specific hook configuration; personal settings are not changed. A native ended turn with no recorded
   background work needs you, but remains a Working task until its workflow changes. Process liveness never means

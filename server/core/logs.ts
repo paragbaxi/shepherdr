@@ -1,5 +1,6 @@
 import { ClaudeReader } from '../common/readers/claude.ts'
 import { CodexReader } from '../common/readers/codex.ts'
+import { AgyReader } from '../common/readers/agy.ts'
 import type { LogEvent, Reader } from '../common/readers/types.ts'
 import type { Message } from '../../shared/types.ts'
 import type { CoreAgents } from './agents.ts'
@@ -22,6 +23,7 @@ export class CoreLogs {
   private waits = new Map<string, { launch: string; started: number; activity: number; revision: number; waiting: boolean }>()
   private hooks = new Map<string, Cursor>()
   private logs = new Map<string, Cursor>()
+  private stops = new Map<string, { id: string; at: number; launch: string; text: string }>()
   private busy = new Set<string>()
   private machines = new Map<string, number>()
   private next = 0
@@ -44,6 +46,7 @@ export class CoreLogs {
           try { await this.observe(agent) } catch (error) { this.error(agent.chat, (error as Error).message) }
           const current = this.agents.get(agent.chat) ?? agent
           if (current.transcript) await this.transcript(current)
+          this.stopFailure(current)
         } catch (error) { this.error(agent.chat, (error as Error).message) }
         finally { this.busy.delete(agent.chat); this.machines.set(agent.machine, (this.machines.get(agent.machine) ?? 1) - 1) }
       })())
@@ -114,8 +117,21 @@ export class CoreLogs {
         try { event = JSON.parse(line.text) } catch { continue }
         if (typeof event.id !== 'string' || typeof event.event !== 'string' || !Number.isFinite(event.at)) continue
         this.agents.hook(agent, event)
+        if (event.error && event.event === 'Stop') this.stops.set(agent.chat, { id: event.id, at: event.at, launch: agent.launch, text: event.error })
       }
     })
+  }
+  /** Antigravity's Stop hook says a turn ended on an error. Its log normally says so too; this is for when it doesn't. */
+  private stopFailure(agent: CoreAgent) {
+    const stop = this.stops.get(agent.chat)
+    if (!stop || !agent.transcript || this.logs.get(agent.chat)?.path !== agent.transcript || !this.logs.get(agent.chat)?.caughtUp) return
+    this.stops.delete(agent.chat)
+    if (stop.launch !== agent.launch) return
+    const events = this.store.all<LogEvent>(`event:${agent.chat}`).filter(event => event.at >= agent.started).sort((a, b) => a.at - b.at)
+    if (events.findLast(event => event.kind === 'error' || event.kind === 'turn-start' || event.kind === 'user')?.kind === 'error') return
+    this.apply(agent, { kind: 'error', id: `stop-${stop.id}`, at: stop.at, text: stop.text })
+    this.apply(agent, { kind: 'turn-end', id: `stop-${stop.id}-end`, at: stop.at })
+    this.changed(agent.chat)
   }
   cleanupComplete(agent: CoreAgent, receipt: string) {
     const saved = this.store.get<CleanupReceipt>('task-cleanup-receipt', agent.chat)
@@ -124,7 +140,7 @@ export class CoreLogs {
   private async transcript(agent: CoreAgent) {
     let cursor = this.logs.get(agent.chat)
     if (!cursor || cursor.path !== agent.transcript) {
-      cursor = { path: agent.transcript!, file: new CoreNativeFile(agent.transcript!), reader: agent.transcriptFormat === 'codex-exec' ? new CoreReviewReader() : agent.kind === 'claude' ? new ClaudeReader() : new CodexReader() }
+      cursor = { path: agent.transcript!, file: new CoreNativeFile(agent.transcript!), reader: agent.transcriptFormat === 'codex-exec' ? new CoreReviewReader() : agent.kind === 'claude' ? new ClaudeReader() : agent.kind === 'agy' ? new AgyReader() : new CodexReader() }
       this.logs.set(agent.chat, cursor)
     }
     cursor.reset = () => {

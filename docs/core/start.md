@@ -9,6 +9,7 @@ for accepted, unverified limits. Stop and preserve legacy writers/state through 
 
 - Bun 1.4.2 (the CI-pinned version), Git, and herdr-core **0.1.14**, generation 1.
 - Claude Code or Codex installed and signed in on each machine that runs agents.
+- Optional: Google's Antigravity CLI (`agy`) signed in, only if Settings → Agents → Backup is Antigravity. It must be on the application's PATH.
 - Tailscale on the server and the devices opening the app.
 
 Build the reviewed source on a build machine or CI, not the shared agent VM:

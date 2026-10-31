@@ -29,7 +29,7 @@ const CODE_PASSING: Record<string, string> = {
 }
 const CODE_LASTING = ['unauthorized', 'bad_request', 'context_window_exceeded', 'usage_limit_exceeded', 'sandbox_error', 'authentication_failed', 'billing_error', 'invalid_request', 'model_not_found', 'max_output_tokens']
 const WORDS_AUTH = /\b(?:status|error|HTTP)\b[^\n]{0,12}\b40[13]\b|\b401 Unauthorized\b|please run \/login|login expired|not logged in|oauth token/i
-const WORDS_ALLOWANCE = /usage limit|(?<!rate.?)limit reached|hit your [\w ]*limit|\bquota\b|billing|credit balance|payment/i
+const WORDS_ALLOWANCE = /usage limit|(?<!rate.?)limit reached|hit your [\w ]*limit|\bquota\b|billing|credit balance|payment|resource.?exhausted|exhausted your/i
 const WORDS_LASTING = /not supported|unsupported|does not exist|may not exist|not found|unknown (?:provider|model)|invalid|context (?:window|length)|flagged|content policy/i
 const WORDS_PASSING: [RegExp, string][] = [
   [/at capacity/i, 'Model at capacity'],
@@ -62,3 +62,9 @@ export function providerError(words: string, code = '', status = 0): ProviderErr
 
 
 export const PROVIDER_WAITS = [1, 2, 4, 8].map(minutes => minutes * 60_000)
+
+/** The agent itself can't go on: its account is out or signed out, or its provider stayed down through every try.
+ *  Anything else (a full context, a refused request, an error nobody recognises) is the human's to look at. */
+export const providerOutage = (reason: string) => /^(?:Signed out|Out of allowance)|, still after \d+ tries$/.test(reason)
+/** An account failure, which a change of login can clear without anything else happening. */
+export const loginFailure = (reason: string) => /^(?:Signed out|Out of allowance)/.test(reason)

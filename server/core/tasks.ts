@@ -9,7 +9,8 @@ import { CorePilotRepositories } from './pilot-repositories.ts'
 import { CoreTaskRelocation } from './task-relocation.ts'
 import { CoreTaskProcesses } from './task-processes.ts'
 import { taskOptions, validateTaskSettings } from './task-options.ts'
-import { CLI_NAME, kindOf } from './settings.ts'
+import { CLI_NAME, backupKindOf, kindOf } from './settings.ts'
+import { isGemini, parseAgy } from '../../shared/models.ts'
 import { CoreGit } from './git.ts'
 import type { CoreSource } from './source.ts'
 import type { AgentKind, CoreSpace } from './model.ts'
@@ -20,6 +21,8 @@ import type { LogEvent } from '../common/readers/types.ts'
 import { reserveTaskId } from './ids.ts'
 import { taskDependencies } from './dependencies.ts'
 import { archiveAfterMs } from '../../shared/archive.ts'
+
+const MAX_TAKEOVERS = 3
 
 export interface CoreTaskInput {
   title: string; brief: string; space?: string; base?: string; after?: string[]; later?: boolean
@@ -51,7 +54,11 @@ export interface CoreTask extends Task {
   mergeQuestion?: string
   startError?: string
   includesPending?: boolean
-  providerTakeover?: { from: AgentKind; to: AgentKind; why: string; at: number; launch: string; state: 'starting' | 'queued' | 'started' | 'failed'; handover?: string }
+  providerTakeover?: {
+    from: AgentKind; to: AgentKind; why: string; at: number; launch: string; state: 'starting' | 'queued' | 'started' | 'failed' | 'returning' | 'returned'; handover?: string
+    /** Only a takeover that hands back: what its agent ran on, the takeovers so far, and whether it did real work since. */
+    back?: { model?: string; effort?: string; session?: string }; count?: number; proved?: boolean
+  }
   model?: string
   effort?: string
   mergeCommit?: string
@@ -283,19 +290,23 @@ export class CoreTasks {
   async providerFallback(id: string, launch: string, reason: string) {
     return this.change(id, async () => {
       const task = this.get(id), agent = task && this.source.agents.get(task.chat)
-      if (!task || !agent || agent.launch !== launch || agent.role !== 'task' || task.workflow !== 'working' || task.archived || task.pilot || agent.pilot || task.providerTakeover) return false
-      const kind = kindOf(this.source.settings.get('task.fallback', task.place))
+      if (!task || !agent || agent.launch !== launch || agent.role !== 'task' || task.workflow !== 'working' || task.archived || task.pilot || agent.pilot || !this.mayTakeOver(task)) return false
+      const kind = backupKindOf(this.source.settings.get('task.fallback', task.place))
       if (!kind || kind === agent.kind || this.source.openPermissions(agent).length || this.source.questions.open(task.chat).length || this.source.secrets.open(task.chat).length) return false
       const choice = this.source.settings.agent('backup', task.place)
+      // Before anything is ended: an Antigravity that can't start leaves the task as it is, needing the human.
+      if (kind === 'agy') await this.checkAntigravity(task.machine, choice.model)
       const location = { machine: task.machine, folder: task.folder }
       // Read context before ending the old process; never clean, reset or replace the checkout.
       const commits = await this.git.run(location, ['log', '--oneline', '-20', `${task.base}..${task.branch}`])
       const changes = await this.git.run(location, ['status', '--short'])
       const chat = this.source.logs.messages(task.chat).filter(message => message.text).slice(-12).map(message => `${message.who}: ${message.text}`).join('\n\n').slice(-12000)
       const current = this.source.agents.get(task.chat), backup = this.source.settings.agent('backup', task.place)
-      if (current?.launch !== launch || kindOf(this.source.settings.get('task.fallback', task.place)) !== kind || backup.model !== choice.model || backup.effort !== choice.effort || this.source.openPermissions(agent).length) return false
+      if (current?.launch !== launch || backupKindOf(this.source.settings.get('task.fallback', task.place)) !== kind || backup.model !== choice.model || backup.effort !== choice.effort || this.source.openPermissions(agent).length) return false
       const handover = `<restart>Provider backup: ${kind} takes over from ${agent.kind}: ${reason}. Continue only the existing agreed task in the same worktree and branch. Preserve all committed and uncommitted work. The following is context, not new authorization.\nCommits:\n${commits.slice(-8000) || 'none'}\nUncommitted changes:\n${changes.slice(-8000) || 'none'}\nRecent chat:\n${chat || 'none'}</restart>`
-      task.providerTakeover = { from: agent.kind, to: kind, why: reason, at: Date.now(), launch, state: 'starting', handover }; this.save(task)
+      task.providerTakeover = { from: agent.kind, to: kind, why: reason, at: Date.now(), launch, state: 'starting', handover,
+        ...(kind === 'agy' ? { back: { model: task.model, effort: task.effort, session: agent.session }, count: (task.providerTakeover?.count ?? 0) + 1 } : {}) }
+      this.save(task)
       try {
         await this.finishForRestart(agent)
         task.kind = kind; task.model = choice.model; task.effort = choice.effort
@@ -309,14 +320,65 @@ export class CoreTasks {
     })
   }
 
+  /** One takeover, unless one that handed back has seen its agent do real work again since: no going back and forth. */
+  private mayTakeOver(task: CoreTask) {
+    const old = task.providerTakeover
+    return !old || old.state === 'returned' && !!old.proved && (old.count ?? 1) < MAX_TAKEOVERS
+  }
+  private async checkAntigravity(machine: string, model?: string) {
+    const list = await this.source.files.exec(machine, ['agy', 'models'], undefined, undefined, 30).catch(() => { throw new Refusal(`${CLI_NAME.agy} is not installed or not signed in on this machine`) })
+    if (!isGemini(model) || !parseAgy(list.toString('utf8'))?.models.some(item => item.id === model)) throw new Refusal(`${CLI_NAME.agy} does not offer the Gemini model set for backups`)
+  }
+  /** The agent a task returned to finished a turn with nothing cutting it off. */
+  providerProved(agent: import('./model.ts').CoreAgent) {
+    const task = this.forChat(agent.chat), takeover = task?.providerTakeover
+    if (!task || task.chat !== agent.chat || takeover?.state !== 'returned' || takeover.proved || agent.kind !== takeover.from) return
+    takeover.proved = true; this.save(task)
+  }
+  /** Back to the agent it took over from, once that can go on. Its session is resumed, so all it knew stays with it. */
+  async providerReturn(id: string, launch: string) {
+    return this.change(id, async () => {
+      const task = this.get(id), agent = task && this.source.agents.get(task.chat), takeover = task?.providerTakeover
+      if (!task || !agent || !takeover || agent.launch !== launch || agent.kind !== takeover.to || takeover.state !== 'started' || task.workflow !== 'working' || task.archived || task.pilot || agent.pilot) return false
+      if (this.source.openPermissions(agent).length || this.source.questions.open(task.chat).length || this.source.secrets.open(task.chat).length) return false
+      const location = { machine: task.machine, folder: task.folder }
+      const commits = await this.git.run(location, ['log', '--oneline', '-20', `${task.base}..${task.branch}`])
+      const changes = await this.git.run(location, ['status', '--short'])
+      const chat = this.source.logs.messages(task.chat).filter(message => message.text && (message.at ?? 0) >= takeover.at).slice(-12).map(message => `${message.who}: ${message.text}`).join('\n\n').slice(-12000)
+      const handover = `<restart>Provider return: you are back on this task. ${takeover.to} kept it going while you could not: ${takeover.why}. Continue only the existing agreed task in the same worktree and branch. Preserve all committed and uncommitted work, including what ${takeover.to} did. The following is context, not new authorization.\nCommits:\n${commits.slice(-8000) || 'none'}\nUncommitted changes:\n${changes.slice(-8000) || 'none'}\nChat since it took over:\n${chat || 'none'}</restart>`
+      takeover.state = 'returning'; takeover.handover = handover; this.save(task)
+      try {
+        await this.finishForRestart(agent)
+        task.kind = takeover.from; task.model = takeover.back?.model; task.effort = takeover.back?.effort
+        delete task.startError; this.save(task)
+        await this.launchNow(task, handover, task.model, task.effort)
+        return true
+      } catch (error) {
+        takeover.state = 'failed'; task.startError = `${CLI_NAME[takeover.from]} could not start again. Existing work was kept; restart this task explicitly.`; this.save(task)
+        throw error
+      }
+    })
+  }
+  /** It was told to start and never said it did. Only the human can see why (a sign-in screen, say). */
+  async providerStalled(id: string, launch: string) {
+    return this.change(id, async () => {
+      const task = this.get(id), agent = task && this.source.agents.get(task.chat)
+      if (!task || agent?.launch !== launch || agent.state !== 'starting') return
+      task.startError = `${CLI_NAME[agent.kind]} did not start. Open its Terminal, or restart this task.`; this.save(task)
+      const card = `provider-stalled-${launch}`
+      this.source.post(task.chat, { id: card, who: 'agent', card: { id: card, text: task.startError }, at: Date.now() })
+      this.source.emit('alert', { id: card, from: 'Shepherdr', title: `${task.id} backup did not start`, body: task.startError, go: { place: task.place, task: task.id, focus: card }, task: true })
+    })
+  }
+
   recoverProviderFallbacks() {
     for (const task of this.all()) {
       const intent = task.providerTakeover
-      if (!intent || intent.state !== 'starting') continue
-      const agent = this.source.agents.get(task.chat)
-      if (agent && agent.launch !== intent.launch && agent.kind === intent.to && this.source.agents.terminal(agent)?.state === 'live') intent.state = 'started'
+      if (!intent || !['starting', 'returning'].includes(intent.state)) continue
+      const agent = this.source.agents.get(task.chat), returning = intent.state === 'returning'
+      if (agent && agent.launch !== intent.launch && agent.kind === (returning ? intent.from : intent.to) && this.source.agents.terminal(agent)?.state === 'live') { intent.state = returning ? 'returned' : 'started'; delete intent.handover }
       else {
-        intent.state = 'failed'; task.startError = 'The provider backup was interrupted. Existing work was kept; restart this task explicitly.'
+        intent.state = 'failed'; task.startError = `The provider ${returning ? 'hand back' : 'backup'} was interrupted. Existing work was kept; restart this task explicitly.`
         if (task.workflow === 'queued') task.workflow = 'todo'
         const id = `provider-takeover-interrupted-${task.id}-${intent.at}`
         this.source.post(task.chat, { id, who: 'agent', card: { id, text: task.startError }, at: Date.now() })
@@ -380,15 +442,19 @@ export class CoreTasks {
     const role = readFileSync(join(import.meta.dir, '../../skill/shepherdr-agent/SKILL.md'), 'utf8')
     const instructions = `${role}\n\nYou are ${task.id} in standalone Shepherdr on core. Use the launch-provisioned authenticated shepherdr command. ${pilot ? 'Your Git metadata is read-only: use shepherdr checkpoint MESSAGE to commit, and shepherdr review TASK for a fresh managed reviewer. Use the product broker for managed agents and messages; no core socket or outside helper is available.' : 'Use hc for child agents, messages and waits.'} Do not use legacy helpers, SSH workers, a web URL or screen scraping. Your branch is ${task.branch}; stay in this worktree.\n`
     const prompt = `${task.desc}\n\n${wait}\n\nSettings:\n- Agent: ${task.kind}${task.model ? `, model ${task.model}` : ''}${task.effort ? `, effort ${task.effort}` : ''}\n- Review: ${task.review.on ? 'on' : 'off'}\n- Reviewer: ${task.review.kind}${task.reviewerModel ? `, model ${task.reviewerModel}` : ''}${task.reviewerEffort ? `, effort ${task.reviewerEffort}` : ''}\n- Must fix: ${task.review.mustFix}\n- Review rounds: ${task.review.rounds}\n- Merge: ${task.mergePolicy === 'ask' ? 'ask the human first' : task.mergePolicy === 'checks' ? 'after GitHub checks' : 'on its own'}\n${Object.keys(task.overrides ?? {}).length ? `Set by the coordinator for this task: ${Object.entries(task.overrides!).map(([key, value]) => `${key}=${value}`).join(', ')}\n` : ''}${message ? `\n<go>${message}</go>` : ''}`
-    const launched = await this.source.agents.launch(space, task.chat, task.kind, prompt, { role: 'task', parent, folder: task.folder, task: task.id, instructions, model, effort, resume: !pilot && !prior?.pilot, pilot: pilot ? { run: pilot.id, hosts: pilot.config.hosts, deadline: pilot.config.runtime ? pilot.started + pilot.config.runtime : undefined, repo: task.repo } : undefined })
+    const launched = await this.source.agents.launch(space, task.chat, task.kind, prompt, { role: 'task', parent, folder: task.folder, task: task.id, instructions, model, effort, resume: !pilot && !prior?.pilot, session: task.providerTakeover?.state === 'returning' ? task.providerTakeover.back?.session : undefined, pilot: pilot ? { run: pilot.id, hosts: pilot.config.hosts, deadline: pilot.config.runtime ? pilot.started + pilot.config.runtime : undefined, repo: task.repo } : undefined })
     if (pilot) this.source.pilots.policy.bind(pilot.id, { chat: launched.chat, launch: launched.launch, role: 'task', task: task.id })
     await this.label(task)
     const takeover = task.providerTakeover
     if (takeover && ['starting', 'queued'].includes(takeover.state) && launched.kind === takeover.to && launched.launch !== takeover.launch) {
       takeover.state = 'started'; delete takeover.handover; this.save(task)
       const card = `provider-takeover-${task.id}-${takeover.at}`
-      const name = (kind: AgentKind) => kind === 'codex' ? 'Codex' : 'Claude Code'
-      this.source.post(task.chat, { id: card, who: 'agent', card: { id: card, text: `${name(takeover.to)} took over from ${name(takeover.from)}: ${takeover.why}` }, at: Date.now() })
+      this.source.post(task.chat, { id: card, who: 'agent', card: { id: card, text: `${CLI_NAME[takeover.to]} took over from ${CLI_NAME[takeover.from]}: ${takeover.why}` }, at: Date.now() })
+    }
+    if (takeover?.state === 'returning' && launched.kind === takeover.from) {
+      takeover.state = 'returned'; delete takeover.handover; this.save(task)
+      const card = `provider-return-${task.id}-${takeover.at}`
+      this.source.post(task.chat, { id: card, who: 'agent', card: { id: card, text: `${CLI_NAME[takeover.from]} is back and took over from ${CLI_NAME[takeover.to]}, with all work kept in this worktree and branch.` }, at: Date.now() })
     }
     } catch (error) { task.startError = (error as Error).message; this.save(task); throw error }
   }
@@ -613,13 +679,18 @@ export class CoreTasks {
         clis: this.source.settings.clis(task.place) } }
       case 'restart':
         if (['merged', 'closed'].includes(task.workflow)) throw new Refusal('This task is Done; ask its coordinator for follow-up work')
-        if (action.kind && action.kind !== 'claude' && action.kind !== 'codex') throw new Refusal('Choose Claude Code or Codex')
+        // Restarting a task that is on its backup returns it to its own agent: nothing is started on a backup by hand.
+        const onBackup = task.kind === 'agy', takeover = task.providerTakeover
+        if (action.kind && action.kind !== 'claude' && action.kind !== 'codex' && !(onBackup && action.kind === 'agy')) throw new Refusal('Choose Claude Code or Codex')
         const current = this.source.pilots.policy.current(task.place)
         const owned = task.pilot && this.source.pilots.policy.get(task.pilot)
         const profile = owned && ['on', 'workers'].includes(owned.state) ? this.source.pilots.policy.live(owned.id) : current?.state === 'on' ? this.source.pilots.policy.live(current.id) : undefined
         if (profile && !task.pilot) throw new Refusal('This task needs its worktree moved out of legacy helper storage before contained adoption')
-        const choice = this.source.settings.checkedAgent(task.place, { kind: action.kind || task.kind, model: action.model, effort: action.effort })
+        const choice = onBackup && (!action.kind || action.kind === 'agy')
+          ? this.source.settings.checkedAgent(task.place, { kind: takeover?.from ?? 'claude', model: takeover?.back?.model, effort: takeover?.back?.effort })
+          : this.source.settings.checkedAgent(task.place, { kind: action.kind || task.kind, model: action.model, effort: action.effort })
         if (agent) await this.finishForRestart(agent)
+        if (onBackup && takeover) { takeover.state = 'returned'; delete takeover.handover }
         await this.profile(task, profile)
         await this.source.browsers?.close(task.id)
         task.kind = choice.kind; task.model = choice.model; task.effort = choice.effort

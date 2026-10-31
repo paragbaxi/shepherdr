@@ -1,6 +1,7 @@
 import type { AgentRuntime, Mode } from '../../shared/types.ts'
 
-export type AgentKind = 'claude' | 'codex'
+/** `agy` (Antigravity) only ever takes a task over as its backup: nothing can be started on it directly. */
+export type AgentKind = 'claude' | 'codex' | 'agy'
 export interface CoreSpace {
   id: string
   name: string
@@ -49,4 +50,6 @@ export interface AgentHook {
   agent?: string
   model?: string
   tool?: string
+  /** Antigravity's Stop hook: why its turn ended early, in its own words. */
+  error?: string
 }
