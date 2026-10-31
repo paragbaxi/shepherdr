@@ -5,6 +5,8 @@
 import { basename, dirname, join } from 'node:path'
 import { isCommand } from '../commands.ts'
 import { testResult } from '../../../shared/activity.ts'
+import { speedWord } from '../../../shared/models.ts'
+import type { AgentRuntime } from '../../../shared/types.ts'
 import { claudeStep, toolName } from './steps.ts'
 import type { CliQuestionItem, LogEvent, Reader } from './types.ts'
 
@@ -81,6 +83,17 @@ function commandOutput(t: string): string | undefined {
   if (!out.trim()) return ''
   // a drawing or table keeps its lines and columns
   return out.includes('\n') ? `\`\`\`\n${out}\n\`\`\`` : out.trim()
+}
+
+/** what Claude Code's own /model, /effort and /fast say they changed: they log no other record until its next reply */
+function commandRuntime(said: string, at: number): AgentRuntime | undefined {
+  // output of more lines than one comes in a code fence (commandOutput); one command can say two things
+  const line = (re: RegExp) => re.exec(said.replace(/^```\n/, ''))?.[1]
+  const model = line(/^Set model to `?([^`\n]+?)`?(?= and | for | with | \(|$)/m)
+  const effort = line(/^(?:Set effort level to|Effort level set to) ([a-z]+)\b/m)
+  const fast = line(/^Fast mode (ON|OFF)\b/m)
+  if (!model && !effort && !fast) return undefined
+  return { ...(model ? { model } : {}), ...(effort ? { effort } : {}), ...(fast ? { speed: fast === 'ON' ? 'fast' : 'normal' } : {}), source: 'session', at }
 }
 
 /** the human's words in one text, or '' when it is something Claude Code wrote */
@@ -193,7 +206,12 @@ export class ClaudeReader implements Reader {
       }
 
       if (l.type === 'assistant' && !l.isSidechain && !l.isApiErrorMessage && typeof l.message?.model === 'string' && !l.message.model.startsWith('<')) {
-        out.push({ kind: 'runtime', file, id: `runtime-${offset}`, at: t, runtime: { model: l.message.model, source: 'session', at: t } })
+        const speed = speedWord(l.message.usage?.speed)
+        out.push({ kind: 'runtime', file, id: `runtime-${offset}`, at: t, runtime: {
+          model: l.message.model, source: 'session', at: t,
+          ...(typeof l.effort === 'string' && l.effort ? { effort: l.effort } : {}),
+          ...(speed ? { speed } : {}),
+        } })
       }
       if (l.type === 'user') {
         const c = l.message?.content
@@ -217,6 +235,8 @@ export class ClaudeReader implements Reader {
         const said = typeof c === 'string' ? commandOutput(c) : undefined
         if (said !== undefined) {
           if (said) out.push({ kind: 'agent', id: String(l.uuid ?? `o${offset}`), at: t, text: said })
+          const runtime = said ? commandRuntime(said, t) : undefined
+          if (runtime) out.push({ kind: 'runtime', file, id: `runtime-${offset}`, at: t, runtime })
           continue
         }
         const words = userContent(c)
@@ -283,7 +303,11 @@ export class ClaudeReader implements Reader {
         const cmd = slashCommand(l.content)
         const said = cmd === undefined ? commandOutput(l.content) : undefined
         if (cmd && once(cmd, t)) out.push({ kind: 'user', id: String(l.uuid ?? `u${offset}`), at: t, text: cmd })
-        else if (said) out.push({ kind: 'agent', id: String(l.uuid ?? `o${offset}`), at: t, text: said })
+        else if (said) {
+          out.push({ kind: 'agent', id: String(l.uuid ?? `o${offset}`), at: t, text: said })
+          const runtime = commandRuntime(said, t)
+          if (runtime) out.push({ kind: 'runtime', file, id: `runtime-${offset}`, at: t, runtime })
+        }
       }
     }
     return out

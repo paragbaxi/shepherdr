@@ -22,6 +22,8 @@ export interface CoreAgent {
   kind: AgentKind
   model?: string
   effort?: string
+  /** the speed asked for at launch, normal or fast; none: the CLI's own */
+  speed?: string
   runtime?: AgentRuntime
   terminal?: string
   pid?: number

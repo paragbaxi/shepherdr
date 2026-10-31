@@ -24,7 +24,7 @@ describe.skipIf(!browser)('composer + agent controls', () => {
         await controls.waitFor()
         await page.getByRole('menuitem', { name: 'File or photo', exact: true }).waitFor()
         expect(await page.locator('[data-restart-hint]').count()).toBe(0)
-        expect(await controls.getByRole('menuitem').count()).toBe(3)
+        expect(await controls.getByRole('menuitem').count()).toBe(4)
         expect(await controls.textContent()).toContain('gpt-6.1-sol')
         await controls.getByRole('menuitem', { name: /^Model:/ }).click()
         const sheet = page.getByRole('alertdialog')
@@ -87,6 +87,80 @@ describe.skipIf(!browser)('composer + agent controls', () => {
       expect(world.chats[chat].agent!.effort).toBeUndefined()
       await page.close()
     }
+  }, 30_000)
+
+  test('the line under the box shows what runs with no tap, at every width, and never moves the box', async () => {
+    const p = world.snapshot().places.find((x) => !x.home)!
+    const key = 'GTM-17/Agent'
+    for (const [width, height] of [[320, 568], [390, 844], [1440, 900]] as const) {
+      for (const chat of [p.chat, key]) {
+        const page = await browser!.newPage({ viewport: { width, height } })
+        page.setDefaultTimeout(10_000) // Surface the failing locator before the enclosing test deadline.
+        const set = (agent: NonNullable<(typeof world.chats)[string]['agent']>, cli = 'Claude Code') => { world.chats[chat].agent = agent; world.chats[chat].cli = cli; world.emit('chat', chat) }
+        set({ kind: 'claude', model: 'claude-opus-5-5', modelLabel: 'Opus 5.5', effort: 'high' })
+        await page.goto(`http://127.0.0.1:${server!.port}/?place=${encodeURIComponent(p.id)}${chat === key ? '&task=GTM-17' : ''}`)
+        const line = page.locator('[data-agent-line]:visible').last()
+        const shows = (words: string | RegExp) => page.locator('[data-agent-line]:visible', { hasText: words }).last().waitFor()
+        await shows(/^Requested: Opus 5\.5\s·\shigh$/)
+        const box = (await page.locator('[data-composer]:visible').last().boundingBox())!
+        set({ kind: 'claude', model: 'claude-opus-5-5', effort: 'high', runtime: { model: 'claude-opus-5-5', modelLabel: 'Opus 5.5', source: 'hook', at: Date.now() } })
+        await shows(/^Opus 5\.5\s·\sRequested: high$/)
+        set({ kind: 'claude', runtime: { model: 'claude-opus-5-5', modelLabel: 'Opus 5.5', effort: 'medium', speed: 'fast', source: 'session', at: Date.now() } })
+        await shows(/^Opus 5\.5\s·\smedium\s·\sFast$/)
+        expect(await line.locator('svg').count()).toBe(1)
+        set({ kind: 'claude', runtime: { model: 'claude-opus-5-5', modelLabel: 'Opus 5.5', effort: 'xhigh', speed: 'normal', source: 'session', at: Date.now() } })
+        await shows(/^Opus 5\.5\s·\sextra high$/)
+        set({ kind: 'codex', runtime: { model: 'an-unknown-very-long-model-id-from-a-newer-cli-than-this-one-and-still-going-on-and-on-past-any-screen', effort: 'high', speed: 'fast', source: 'session', at: Date.now() } }, 'Codex')
+        await shows('Fast')
+        // the id gives way: effort and speed stay on screen
+        const fast = (await line.getByText('Fast').boundingBox())!
+        expect(fast.x + fast.width).toBeLessThanOrEqual(width)
+        set({ kind: 'codex' }, 'Codex')
+        await shows('Codex · Not reported')
+        expect((await page.locator('[data-composer]:visible').last().boundingBox())!.y).toBe(box.y)
+        expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width)
+        await line.click()
+        await page.locator('[data-agent-controls]:visible').last().getByRole('menuitem', { name: 'Speed: Not reported. Select and restart', exact: true }).waitFor()
+        await page.close()
+      }
+    }
+  }, 60_000)
+
+  test('the + menu says what is requested until its records say what runs, Speed included', async () => {
+    const key = 'GTM-17/Agent'
+    world.chats[key].agent = { kind: 'claude', model: 'claude-opus-5-5', modelLabel: 'Opus 5.5', effort: 'high', speed: 'fast' }
+    world.chats[key].cli = 'Claude Code'
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 } })
+    page.setDefaultTimeout(10_000) // Surface the failing locator before the enclosing test deadline.
+    await page.goto(`http://127.0.0.1:${server!.port}/?place=all&task=GTM-17`)
+    await page.locator('[data-composer]:visible button[aria-label="Attach files and more"]').last().click()
+    const controls = page.locator('[data-agent-controls]:visible').last()
+    await controls.getByRole('menuitem', { name: 'Model: Requested: Opus 5.5. Select and restart', exact: true }).waitFor()
+    await controls.getByRole('menuitem', { name: 'Effort: Requested: High. Select and restart', exact: true }).waitFor()
+    await controls.getByRole('menuitem', { name: 'Speed: Requested: Fast. Select and restart', exact: true }).waitFor()
+    world.chats[key].agent!.runtime = { model: 'claude-opus-5-5', modelLabel: 'Opus 5.5', effort: 'high', speed: 'normal', source: 'session', at: Date.now() }
+    world.emit('chat', key)
+    await controls.getByRole('menuitem', { name: 'Speed: Normal. Select and restart', exact: true }).waitFor()
+    await page.close()
+  }, 30_000)
+
+  test('Speed picks wait for Restart and go with it; what it was started on is the starting pick', async () => {
+    const key = 'GTM-17/Agent'
+    world.chats[key].agent = { kind: 'codex', speed: 'fast' }
+    world.chats[key].cli = 'Codex'
+    const page = await browser!.newPage({ viewport: { width: 390, height: 844 } })
+    page.setDefaultTimeout(10_000) // Surface the failing locator before the enclosing test deadline.
+    await page.goto(`http://127.0.0.1:${server!.port}/?place=all&task=GTM-17`)
+    await page.locator('[data-composer]:visible button[aria-label="Attach files and more"]').last().click()
+    await page.locator('[data-agent-controls]:visible').last().getByRole('menuitem', { name: /^Speed:/ }).click()
+    const sheet = page.getByRole('alertdialog')
+    await sheet.getByRole('button', { name: 'Speed: Fast', exact: true }).click()
+    await page.getByRole('menuitemradio', { name: 'Normal', exact: true }).click()
+    expect(world.chats[key].agent!.speed).toBe('fast')
+    await sheet.getByRole('button', { name: 'Restart', exact: true }).click()
+    await sheet.waitFor({ state: 'hidden' })
+    expect(world.chats[key].agent!.speed).toBe('normal')
+    await page.close()
   }, 30_000)
 
   test('a retired launch model stays visible, blocks Restart, and can be replaced with Default', async () => {
