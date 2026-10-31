@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { CoreAgents } from '../server/core/agents.ts'
@@ -151,5 +151,79 @@ for (const kind of ['claude', 'codex'] as const) test(`${kind} coordinator launc
       expect(argv).not.toContain('--permission-mode')
       expect(argv).not.toContain('--dangerously-skip-permissions')
     }
+  } finally { store.close(); rmSync(home, { recursive: true, force: true }) }
+})
+
+/** A core that runs nothing: file commands answer as a machine would, and what they were asked is kept. */
+function agyCore(answers: { shipsCustomizations?: boolean } = {}) {
+  const exec: { argv: string[]; on?: string; cwd?: string }[] = []
+  let run: { argv: string[]; on?: string; cwd?: string } | undefined, count = 0
+  const reply = (text = '', code = 0) => ({ stdout: Buffer.from(text).toString('base64'), stderr: '', code, timed_out: false, truncated: false })
+  const core = { current: { terminals: new Map() }, call: async (method: string, input: { argv: string[]; on?: string; cwd?: string }) => {
+    if (method === 'terminal.run') { run = input; return { address: `t${++count}`, pid: count } }
+    exec.push(input)
+    if (input.argv[0] === 'mkdir' && !input.on) for (const path of input.argv.slice(4)) mkdirSync(path, { recursive: true })
+    if (input.argv[0] === 'git') return reply('/repo/.git\n/repo/.git/worktrees/task\n')
+    if (input.argv[0] === 'sh') return reply('', answers.shipsCustomizations ? 1 : 0)
+    return reply()
+  } } as unknown as CoreSession
+  return { core, exec, run: () => run! }
+}
+const GEMINI = { role: 'task' as const, task: 'T-1', folder: '/work/task', model: 'gemini-3.8-flash-low' }
+const SPACE = { id: 'space', name: 'Example', machine: 'machine', folder: '/unused', base: 'main', prefix: 'EX', mode: 'regular' as const, added: 1 }
+
+test('Antigravity starts on the named Gemini model, in its sandbox, with no permission skip, and only as a task', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'shep-agy-start-')), store = new CoreStore(home)
+  try {
+    const { core, run } = agyCore()
+    const mailbox = { issue: () => ({ id: 'agy-grant', credential: {} }) } as unknown as Mailbox
+    const agents = new CoreAgents({ home, port: 0, session: 'test', socket: '/unused', binary: 'hc' }, { format: 'shepherdr-core', schema: 1, id: 'installation' }, core, store, mailbox, async () => undefined, () => {})
+    await agents.launch(SPACE, 'T-1/Agent', 'agy', 'The brief', GEMINI)
+    const argv = run().argv, workspace = join(`${home}/worktrees_agy`, 'agy-grant')
+    expect(argv[0]).toBe('agy')
+    expect(argv.join(' ')).not.toContain('dangerously')
+    expect(argv.slice(argv.indexOf('--model'), argv.indexOf('--model') + 2)).toEqual(['--model', 'gemini-3.8-flash-low'])
+    for (const flag of ['--sandbox', '--mode', 'accept-edits']) expect(argv).toContain(flag)
+    expect(argv.slice(argv.indexOf('--add-dir'), argv.indexOf('--add-dir') + 2)).toEqual(['--add-dir', workspace])
+    // Its whole opening stays out of the chat.
+    expect(argv.at(-1)).toStartWith('<restart>')
+    expect(argv.at(-1)).toContain('The brief')
+    const hooks = JSON.parse(readFileSync(join(workspace, '.agents/hooks.json'), 'utf8'))
+    expect(hooks.shepherdr.PreToolUse[0].hooks[0].command).toContain("core-agy-hook.ts' PreToolUse '/work/task'")
+    expect(JSON.parse(readFileSync(join(workspace, 'settings.json'), 'utf8'))).toMatchObject({ trustedWorkspaces: ['/work/task', workspace], enableTerminalSandbox: true, useG1Credits: false })
+    // It sorts after any worktree beside it, so commands start in the worktree.
+    expect(workspace > `${home}/worktrees/space/task`).toBe(true)
+    await expect(agents.launch(SPACE, 'x', 'agy', 'p', { ...GEMINI, model: 'claude-opus-5-5-low' })).rejects.toThrow('only on a Gemini model')
+    await expect(agents.launch(SPACE, 'y', 'agy', 'p', { ...GEMINI, model: undefined })).rejects.toThrow('only on a Gemini model')
+    await expect(agents.launch(SPACE, 'z', 'agy', 'p', { ...GEMINI, role: 'coordinator' })).rejects.toThrow('only takes a task over')
+    await expect(agents.launch(SPACE, 'w', 'agy', 'p', { ...GEMINI, role: 'reviewer', readOnly: true })).rejects.toThrow('only takes a task over')
+  } finally { store.close(); rmSync(home, { recursive: true, force: true }) }
+})
+
+test('a worktree shipping its own Antigravity customizations stays for the human to trust', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'shep-agy-trust-')), store = new CoreStore(home)
+  try {
+    const { core } = agyCore({ shipsCustomizations: true })
+    const mailbox = { issue: () => ({ id: 'agy-grant', credential: {} }) } as unknown as Mailbox
+    const agents = new CoreAgents({ home, port: 0, session: 'test', socket: '/unused', binary: 'hc' }, { format: 'shepherdr-core', schema: 1, id: 'installation' }, core, store, mailbox, async () => undefined, () => {})
+    await agents.launch(SPACE, 'T-1/Agent', 'agy', 'The brief', GEMINI)
+    expect(JSON.parse(readFileSync(join(`${home}/worktrees_agy`, 'agy-grant', 'settings.json'), 'utf8')).trustedWorkspaces).toEqual([join(`${home}/worktrees_agy`, 'agy-grant')])
+  } finally { store.close(); rmSync(home, { recursive: true, force: true }) }
+})
+
+test('on another machine Antigravity gets all its launch files past the remote check, before anything starts', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'shep-agy-remote-')), store = new CoreStore(home)
+  try {
+    const { core, exec, run } = agyCore()
+    const mailbox = { issue: () => ({ id: 'agy-grant', credential: {} }) } as unknown as Mailbox
+    const agents = new CoreAgents({ home, port: 0, session: 'test', socket: '/unused', binary: 'hc' }, { format: 'shepherdr-core', schema: 1, id: 'installation' }, core, store, mailbox, async () => 'box', () => {})
+    const runtime = { root: '/far/install/digest', home: '/far', bun: '/far/bun', hc: '/far/hc', path: '/far/bin', endpoint: '/far/core.sock', browser: '/far/browser' }
+    ;(agents as unknown as { remotes: { prepare(machine: string): Promise<unknown> } }).remotes.prepare = async () => runtime
+    await agents.launch(SPACE, 'T-1/Agent', 'agy', 'The brief', GEMINI)
+    expect(run().on).toBe('box')
+    expect(run().argv.slice(run().argv.indexOf('--add-dir'), run().argv.indexOf('--add-dir') + 2)).toEqual(['--add-dir', '/far/install/worktrees_agy/agy-grant'])
+    const written = exec.filter(item => item.argv[1] === '-e').map(item => item.argv.at(-1))
+    expect(written).toContain('/far/install/worktrees_agy/agy-grant/.agents/hooks.json')
+    expect(written).toContain('/far/install/worktrees_agy/agy-grant/settings.json')
   } finally { store.close(); rmSync(home, { recursive: true, force: true }) }
 })

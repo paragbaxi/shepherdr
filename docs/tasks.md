@@ -83,7 +83,7 @@
   On Antigravity the chat works as usual: its replies and steps come from its own transcript, status from its hooks,
   and `shepherdr ask` and other cards still appear. It gets no more than a task agent: commands run in `agy`'s terminal
   sandbox, without `--dangerously-skip-permissions`. That is this worktree plus the parts of git's folder a commit
-  writes, with no network and not the launch credentials. Neither commands nor edits may touch what something outside
+  writes, and not the launch credentials; it doesn't stop network use, as a task agent's own permissions don't either. Neither commands nor edits may touch what something outside
   the sandbox later acts on, without a card: git's hooks, config and metadata pointers, the worktree's `.git`, its
   `.agents` (`agy`'s own hooks), and `.claude`, `.codex` and `.mcp.json`, which the agent it hands back to would load.
   Anything else that leaves the sandbox or the worktree is a permission card you answer; once you allow it, Shepherdr
