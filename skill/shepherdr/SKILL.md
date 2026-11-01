@@ -104,7 +104,10 @@ chat, or says it no longer matters, withdraw it, so they never have to scroll ba
 - **Late taps.** The card stays in the chat as closed with your reason, and a late tap on it is refused.
 - **Screens.** A CLI's own screen (`withdrawable: false`) can't be withdrawn: the agent stays stopped there until it
   is answered in the Terminal, or stopped or restarted.
+- **A form goes whole.** Withdrawing one question of Claude's own form closes all of it, and the command says so.
 - **Who.** Your own chat's cards only; a reviewer has none to withdraw. On Autopilot it is refused: the human taps.
+- **After.** Nothing left to do in your task? `shepherdr todo <id>`, then end your turn: a turn that just ends shows
+  Needs you.
 
 `<card-withdrawn card="…" by="coordinator">why</card-withdrawn>` says your coordinator withdrew one of your cards. Stop
 waiting for it: carry on without it, and ask again only if you still need it. With nothing to do without it, say so in

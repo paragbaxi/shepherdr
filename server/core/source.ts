@@ -50,7 +50,7 @@ import { CoreUnread } from './unread.ts'
 import { CoreCards } from './cards.ts'
 import { CoreCardWithdrawals } from './card-withdrawals.ts'
 import { CorePilotMail } from './pilot-mail.ts'
-import { askText, clip, lastReply, quickChoices, TITLE_MAX, BODY_MAX } from '../../shared/alerts.ts'
+import { askText, clip, lastReply, quickChoices, TITLE_MAX, BODY_MAX, WITHDRAWN } from '../../shared/alerts.ts'
 import { CANCELLED, hookEnd, logEnd, NativeEnds, STOPPED } from './native-ends.ts'
 import { ownCommand } from './own-commands.ts'
 import { NATIVE_UNREADABLE, nativeAnswer, nativeCards, nativeClosed, nativeReply, permissionChoices, permissionWords, type NativeAsk, type PermissionAnswer } from './native-asks.ts'
@@ -419,13 +419,14 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
     }
     this.permissions.get(permission.id)?.(permission.reply ?? { allow: false }); this.permissions.delete(permission.id)
   }
-  /** Denied, never allowed, and saying so: the agent's own hook would otherwise tell it the human declined. False: no such prompt. */
+  /** Denied, never allowed, and saying so: the agent's own hook would otherwise tell it the human declined. A form goes whole, for its one tool call can only be refused whole. Returns how many cards closed: none for no such prompt. */
   withdrawPermission(id: string, reason: string) {
     const permission = this.store.get<Permission>('permission', id)
-    if (!permission) return false
+    if (!permission) return 0
+    const closing = permission.native ? this.nativeRows(permission.native.head).filter(card => !card.settled).length : 1
     if (!permission.native) permission.reply = nativeClosed(reason)
     this.expirePermission(permission, reason)
-    return true
+    return closing
   }
   /** A phone that showed this chat's card drops its alert and takes the new count, without a sound. */
   clearAlert(chat: string, reason: string, tag = chat) {
@@ -507,7 +508,7 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
       case 'answer': {
         // A late tap, from a stale screen or a phone's alert, changes nothing on a withdrawn card.
         const withdrawn = this.store.get<Message>(`message:${action.chat}`, action.question)?.question?.closed
-        if (withdrawn?.startsWith('Withdrawn: ')) throw new Refusal(`This card has closed: ${withdrawn}`)
+        if (withdrawn?.startsWith(WITHDRAWN)) throw new Refusal(`This card has closed: ${withdrawn}`)
         if (await this.tasks.answer(action.question, action.choice, action.chat)) return { ok: true }
         if (await this.questions.answer(action)) return { ok: true }
         if (await this.screens.answer(action)) return { ok: true }

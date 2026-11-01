@@ -19,6 +19,9 @@ export const clip = (text: string, n: number) => excerpt(text, n)
 /** the tag of a coordinator's open question: one alert per coordinator, as one per task */
 export const askTag = (place: string) => `ask:${place}`
 
+/** how a withdrawn card's closed words begin: it is refused from then on, and shows no choices */
+export const WITHDRAWN = 'Withdrawn: '
+
 /** what waits on you everywhere: the count the app icon shows (the sidebar's own counts added up: every need, and each
  *  Ready task) and the tag of each thing, so alerts about what no longer waits can go */
 export function waiting(snap: Pick<Snapshot, 'places' | 'tasks' | 'asks' | 'needs'>): { count: number; tags: string[] } {

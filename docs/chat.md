@@ -111,8 +111,10 @@ its turn on a question.
   it, from a stale screen or an alert, is refused. Withdrawing answers nothing: a plan stays unapproved, a merge card
   merges nothing (the task stays Ready; a fresh ready report asks again), a permission prompt ends as denied and a
   secret request saves nothing. An agent withdraws its own chat's cards; a coordinator also those of its own space's
-  tasks, whose agents are told why. A task that was only waiting on that card shows To do until you next write to it,
-  unless its agent carries on or asks you something. A CLI's own screen can't be withdrawn, for the agent stays stopped there until it
+  tasks, whose agents are told why. A task whose coordinator withdrew the card it waited on shows To do until you next
+  write to it, unless its agent carries on or asks you something. An agent stopped at its own permission prompt, plan
+  or form can't read your words until that's answered, so ask the coordinator to withdraw a task's, and tap a
+  coordinator's own. Claude's own form goes whole, as its one tool call can only be refused whole. A CLI's own screen can't be withdrawn, for the agent stays stopped there until it
   is answered or restarted, and neither can a wait with no card or a Ready task. Agents on Autopilot can't withdraw.
 - The list stays still under your thumb. A new card only ever joins the end. A card answered, here or anywhere else,
   keeps its place and its height until you leave Needs you, or tap Clear once none is open.

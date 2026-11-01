@@ -26,6 +26,7 @@ function fixture() {
     agent(`${id}/Agent`, place, 'task')
     source.store.set('task', id, { id, localId: id, chat: `${id}/Agent`, place, machine, name: id, folder: '/unused', repo: '/unused', base: 'main', workflow: 'working', review: { on: false }, age: 'now', created: new Date().toISOString(), kind: 'claude', ...extra })
   }
+  source.agents.terminal = (() => ({ state: 'live', address: 't' })) as unknown as typeof source.agents.terminal
   space('space'); space('other'); space('overview', { home: true })
   agent('space', 'space', 'coordinator'); agent('other', 'other', 'coordinator'); agent('overview', 'overview', 'coordinator')
   task('EX-1', 'space'); task('EX-2', 'space'); task('OT-1', 'other')
@@ -157,7 +158,7 @@ test('a coordinator withdraws a task agent’s card: that agent is told why, and
     expect(view()).toBe('need')
     const before = f.count()
     const out = await f.card('space', 'withdraw', id, '--why', 'The <human> settled it.')
-    expect(out).toContain(`Its agent in ${WORKER} was told why`)
+    expect(out).toContain(`Its agent in ${WORKER} is being told why`)
     expect(view()).toBe('todo')
     expect(f.count()).toBe(before - 1)
     expect(f.source.snapshot().needs.filter(need => need.chat === WORKER)).toEqual([])
@@ -180,11 +181,15 @@ test('a coordinator withdraws a task agent’s card: that agent is told why, and
     expect(view()).toBe('need')
     f.source.store.delete(`message:${WORKER}`, 'asking')
     expect(view()).toBe('todo')
-    // Work that goes on for long ends as any other turn does.
-    const own = f.source.agents.get(WORKER)!
-    f.source.store.set('agent', WORKER, { ...own, activityAt: Date.now() + 6 * 60_000 })
+    // Any work since ends as any other turn does, however quick.
+    f.source.store.set(`event:${WORKER}`, 'step-one', { kind: 'step', id: 'step-one', at: Date.now() + 1000, step: 'run', tool: 'Bash' })
     expect(view()).toBe('need')
-    f.source.store.set('agent', WORKER, own)
+    f.source.store.delete(`event:${WORKER}`, 'step-one')
+    expect(view()).toBe('todo')
+    // A secret asked for since, even one already answered, ends it too.
+    f.source.post(WORKER, { id: 'later-secret', who: 'agent', secret: { id: 'later-secret', name: 'LATER_KEY', levels: [] }, at: Date.now() + 1500 })
+    expect(view()).toBe('need')
+    f.source.store.delete(`message:${WORKER}`, 'later-secret')
     expect(view()).toBe('todo')
     // A new card asks again.
     f.ask(WORKER, 'One more?', Date.now() + 2000)
@@ -198,6 +203,43 @@ test('a coordinator withdraws a task agent’s card: that agent is told why, and
   } finally { f.close() }
 })
 
+test('an agent that withdraws its own card and then ends its turn needs the human as after any turn', async () => {
+  const f = fixture()
+  try {
+    f.source.core.current.connected = true
+    f.source.agents.terminal = (() => ({ state: 'live', address: 't', status: { state: 'idle' } })) as unknown as typeof f.source.agents.terminal
+    f.source.logs.waiting = () => true
+    await f.card(WORKER, 'withdraw', f.ask(WORKER), '--why', 'Answered in chat')
+    expect(f.source.tasks.get('EX-1')?.cardWithdrawnAt).toBeUndefined()
+    expect(f.source.tasks.view(f.source.tasks.get('EX-1')!).status).toBe('need')
+  } finally { f.close() }
+})
+
+test('with another card still open the task still needs the human, and keeps its alert', async () => {
+  const f = fixture()
+  try {
+    f.source.core.current.connected = true
+    f.source.agents.terminal = (() => ({ state: 'live', address: 't', status: { state: 'idle' } })) as unknown as typeof f.source.agents.terminal
+    f.source.logs.waiting = () => true
+    const first = f.ask(WORKER, 'First?', 100), second = f.ask(WORKER, 'Second?', 200)
+    await f.card('space', 'withdraw', first, '--why', 'Settled')
+    expect(f.source.tasks.view(f.source.tasks.get('EX-1')!).status).toBe('need')
+    expect(waiting(f.source.snapshot()).tags).toContain('EX-1')
+    expect(f.source.snapshot().needs.map(need => need.id)).toEqual([second])
+  } finally { f.close() }
+})
+
+test('an agent that isn’t running is not said to be told', async () => {
+  const f = fixture()
+  try {
+    f.source.agents.terminal = (() => ({ state: 'finished' })) as unknown as typeof f.source.agents.terminal
+    const out = await f.card('space', 'withdraw', f.ask(WORKER), '--why', 'Settled')
+    expect(out).toContain("isn't running, so it was not told")
+    expect(f.lines()).toEqual([])
+    expect(f.source.tasks.get('EX-1')?.cardWithdrawnAt).toBeUndefined()
+  } finally { f.close() }
+})
+
 test('a coordinator saying which card it withdrew, by its question, is not asking one', async () => {
   const f = fixture()
   try {
@@ -207,7 +249,12 @@ test('a coordinator saying which card it withdrew, by its question, is not askin
     await f.card('space', 'withdraw', id, '--why', 'Settled')
     f.source.post('space', { id: 'said', who: 'agent', text: 'I withdrew the "Which branch?" card.', at: Date.now() + 1000 })
     expect(f.source.snapshot().needs).toEqual([])
-    f.source.post('space', { id: 'asked', who: 'agent', text: 'Which branch next?', at: Date.now() + 2000 })
+    f.source.post('space', { id: 'also', who: 'agent', text: 'Gone: "Which branch?", and `Keep it?` too.', at: Date.now() + 1500 })
+    expect(f.source.snapshot().needs).toEqual([])
+    // A question that ends its words is one being asked, quoted or not.
+    f.source.post('space', { id: 'quoted', who: 'agent', text: 'Should the title be "Which branch?"', at: Date.now() + 2000 })
+    expect(f.source.snapshot().needs).toMatchObject([{ id: 'attention', chat: 'space' }])
+    f.source.post('space', { id: 'asked', who: 'agent', text: 'Which branch next?', at: Date.now() + 3000 })
     expect(f.source.snapshot().needs).toMatchObject([{ id: 'attention', chat: 'space' }])
   } finally { f.close() }
 })
@@ -304,6 +351,13 @@ test('Claude’s own plan and question cards end as denied: no plan approved and
     expect(formed.allow).toBe(false)
     expect(formed.updatedInput).toBeUndefined()
     expect(await f.cards(WORKER)).toEqual({ cards: [], total: 0 })
+    // A form goes whole, and the command says so.
+    const whole = f.permission(WORKER, 'AskUserQuestion', { questions: [
+      { question: 'Which fruit?', options: [{ label: 'Pear' }, { label: 'Plum' }] },
+      { question: 'Which colour?', options: [{ label: 'Red' }, { label: 'Blue' }] },
+    ] })
+    expect(await f.card(WORKER, 'withdraw', whole.id, '--why', 'Settled')).toContain('the rest of its form, 2 cards in all')
+    expect((await whole.reply).allow).toBe(false)
   } finally { f.close() }
 })
 
@@ -350,10 +404,13 @@ test('the phone’s alert goes with its card and takes the new count, unless a n
     const clears = () => alerts.filter(alert => alert.clear)
     const older = f.ask(WORKER, 'Older?', 100), newer = f.ask(WORKER, 'Newer?', 200)
     await f.card(WORKER, 'withdraw', older, '--why', 'Settled')
-    expect(clears()).toEqual([])
-    await f.card(WORKER, 'withdraw', newer, '--why', 'Settled too')
+    // The newer card's alert stays: this push closes only its own tag, and still brings the new count.
     expect(clears()).toHaveLength(1)
-    const payload = pushPayload(clears()[0], waiting(f.source.snapshot()))
+    expect(clears()[0].tag).toBe(older)
+    expect(pushPayload(clears()[0], waiting(f.source.snapshot())).badge).toBe(1)
+    await f.card(WORKER, 'withdraw', newer, '--why', 'Settled too')
+    expect(clears()).toHaveLength(2)
+    const payload = pushPayload(clears()[1], waiting(f.source.snapshot()))
     expect(payload).toMatchObject({ clear: true, tag: 'EX-1', badge: 0 })
     expect(payload.open).not.toContain('EX-1')
     // A coordinator's own card goes by its own tag.

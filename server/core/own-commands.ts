@@ -1,7 +1,7 @@
 /** A launch's own shepherdr command, by what it may do without a permission prompt. secret run and secret env stay
  *  out: one runs any program, the other writes any ignored file. A verb that isn't listed only keeps its card. */
 const OWN = ['help', 'show', 'models', 'set', 'unset', 'alert', 'space', 'task', 'status', 'ask', 'plan', 'review', 'pr', 'checks', 'ready', 'merge',
-  'heartbeat', 'automation', 'todo', 'artifact', 'secret list', 'secret ask']
+  'heartbeat', 'automation', 'todo', 'artifact', 'card', 'secret list', 'secret ask']
 
 /** Claude's allow rules for this exact path. A path a rule can't state literally gets none, never a wider rule. */
 export function ownRules(command: string) {

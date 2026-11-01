@@ -1,4 +1,4 @@
-import { askTag } from '../../shared/alerts.ts'
+import { askTag, WITHDRAWN } from '../../shared/alerts.ts'
 import type { Need } from '../../shared/types.ts'
 import { age } from '../common/age.ts'
 import { tag } from '../common/chatlines.ts'
@@ -65,19 +65,25 @@ export class CoreCardWithdrawals {
     // One answer for closed, unknown and out of reach: this says nothing about another space's cards.
     const need = this.open(agent).find(item => item.id === id)
     if (!need) throw new Refusal('That card is not open within your reach. shepherdr card list shows the ones you can withdraw.')
-    const kind = this.kind(need), closed = `Withdrawn: ${reason}`, title = this.title(need)
+    const kind = this.kind(need), closed = `${WITHDRAWN}${reason}`, title = this.title(need)
     // A CLI's own screen keeps its agent stuck whatever the card says, and the next look puts the card straight back.
     if (kind === 'Screen') throw new Refusal('This card is its CLI’s own screen: the agent stays stopped there until it is answered, so it cannot be withdrawn. Answer it in the Terminal, or stop or restart the agent.')
     if (kind === 'Merge') await this.source.tasks.withdrawMerge(id, closed)
-    this.source.tasks.noteWithdrawn(need.chat)
-    const told = need.chat !== agent.chat && !!this.source.agents.get(need.chat)
+    // Only a running agent can hear it, and only one that was waiting for it can have nothing left to do.
+    const other = need.chat !== agent.chat, owner = this.source.agents.get(need.chat), told = other && !!owner && this.source.agents.terminal(owner)?.state === 'live'
+    if (told) this.source.tasks.noteWithdrawn(need.chat)
     if (told) this.source.saveAndDeliver(need.chat, `card-withdrawn-${id}`, `<shepherdr>${tag('card-withdrawn', { card: plain(title), by: 'coordinator' }, `${plain(reason).replace(/\.$/, '')}. ${ENDED[kind] ?? 'Nothing was answered or approved.'} Don't wait for it: carry on without it, and ask again only if you still need it.`)}</shepherdr>`, () => {}, true)
+    let closing = 1
     if (kind === 'Secret') this.source.secrets.withdraw(id, closed)
-    else if (kind !== 'Merge' && !this.source.withdrawPermission(id, closed)) this.source.questions.withdraw(id, closed)
-    // The phone's alert shows the chat's newest card: a newer one still open keeps its alert.
-    const newer = this.source.snapshot().needs.some(other => other.chat === need.chat && other.id !== 'attention' && other.at > need.at)
-    if (!newer) this.source.clearAlert(need.chat, closed, need.task ?? askTag(need.place))
+    else if (kind !== 'Merge') {
+      closing = this.source.withdrawPermission(id, closed)
+      if (!closing) { this.source.questions.withdraw(id, closed); closing = 1 }
+    }
+    // The phone's alert shows the chat's newest card: a newer one still open keeps its alert, and the push under this card's own tag only brings the new count.
+    const newer = this.source.snapshot().needs.some(item => item.chat === need.chat && item.id !== 'attention' && item.at > need.at)
+    this.source.clearAlert(need.chat, closed, newer ? id : need.task ?? askTag(need.place))
     this.source.emit('snapshot')
-    return `Withdrew ${kind.toLowerCase()} card: ${title}${told ? `\nIts agent in ${need.chat} was told why.` : ''}`
+    const form = closing > 1 ? ` and the rest of its form, ${closing} cards in all` : ''
+    return `Withdrew ${kind.toLowerCase()} card: ${title}${form}${!other ? '' : told ? `\nIts agent in ${need.chat} is being told why.` : `\nIts agent in ${need.chat} isn't running, so it was not told.`}`
   }
 }

@@ -35,7 +35,7 @@
   for other tasks), To do (it waits for a go, or is still starting up; a To do row is its title alone), Ready
   (`shepherdr ready`: finished, waits for you to merge it), Merging (`shepherdr merge` under way: GitHub's checks run,
   a rebase or the merge itself, nothing for you to do) and Done (`shepherdr merge`: Merged, or closed: Nothing to merge). The list and the task's chat always show
-  the same. Once started, only the agent puts a task in To do; one that stops for any other reason needs you, except
+  the same. Once started, only the agent puts a task in To do, or its coordinator withdrawing a card it waits on, while the agent then takes no step and asks nothing; one that stops for any other reason needs you, except
   while work it started in the background (a reviewer subagent, a shell, a monitor) still runs and will wake it: that
   is still Working (shells alone for up to 10 minutes, since a server it started for you never wakes it; a shell
   running a headless reviewer of another CLI, `codex exec` or `claude -p`, counts as a subagent), unless its last

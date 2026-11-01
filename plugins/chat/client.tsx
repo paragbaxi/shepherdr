@@ -9,7 +9,7 @@ import { AlertIcon, BackIcon, CameraIcon, CheckIcon, Count, DeleteIcon, dimmed, 
 import { canDictate, dictate, dictSample, type Dictation } from '@client/dictation.ts'
 import { extOf, isImage } from '@shared/files.ts'
 import { modelCommand, modeName, taskChatId, type CardAsk, type Chat, type MergeEvidence, type Message, type Place, type Question, type ReplyQuote, type SecretAsk, type UpdateCard } from '@shared/types.ts'
-import { sendsOnTap } from '@shared/alerts.ts'
+import { sendsOnTap, WITHDRAWN } from '@shared/alerts.ts'
 import { buzz, mine, openBar, openPicker, quick, react } from '@plugins/reactions/client.tsx'
 import { EDGE } from '@client/gestures.ts'
 import { still, useArrive } from '@client/motion.ts'
@@ -1389,7 +1389,7 @@ export function QuestionCard({ q, chat, msg, from, source, steady }: { q: Questi
         </ol>
       ) : null}
       {immediate && !q.press ? <p className="text-[0.8125rem] text-fg2">Choose an answer to send it now.</p> : null}
-      {q.choices.map((c, j) => {
+      {q.closed?.startsWith(WITHDRAWN) ? null : q.choices.map((c, j) => {
         const on = sent ? q.sent === j : sel.includes(j)
         const word = immediate && !q.press ? `Send: ${c.label}` : c.label
         return (
