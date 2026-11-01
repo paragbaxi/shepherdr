@@ -53,6 +53,13 @@ function fixture() {
 test('the list says id, title, age and chat, a coordinator across its own tasks and never another space', async () => {
   const f = fixture()
   try {
+    expect((await f.cards(WORKER)).cards).toEqual([])
+    const long = f.ask(WORKER, `Use my_dir and \`x*y\`\non two lines ${'word '.repeat(60)}`)
+    const row = (await f.cards(WORKER)).cards[0]
+    expect(row.title).toStartWith('Use my_dir and `x*y` on two lines word')
+    expect(row.title).toEndWith('…')
+    expect(row.title.length).toBe(120)
+    await f.card(WORKER, 'withdraw', long, '--why', 'Settled')
     const old = f.ask(WORKER, 'Rerun CI?', Date.now() - 3 * 3600_000), own = f.ask('space', 'Which branch?'), sibling = f.ask('EX-2/Agent', 'Keep it?'), far = f.ask('OT-1/Agent', 'Not yours?'), top = f.ask('other', 'Theirs?')
     const listed = await f.cards('space')
     expect(listed.total).toBe(3)
@@ -363,7 +370,8 @@ test('a secret’s alert is tagged like any card’s, so a phone drops it once t
     f.source.on('alert', alert => alerts.push(alert as Alert))
     await f.source.secrets.cli(f.source.agents.get(WORKER)!, ['secret', 'ask', 'DEMO_KEY', '--why', 'To deploy'])
     await f.source.secrets.cli(f.source.agents.get('space')!, ['secret', 'ask', 'OTHER_KEY', '--why', 'To deploy'])
-    expect(alerts.map(alert => alert.tag)).toEqual(['EX-1', 'ask:space'])
+    // A coordinator's chat also gets its plain new-message alert, which Notify decides on.
+    expect(alerts.filter(alert => !alert.message).map(alert => alert.tag)).toEqual(['EX-1', 'ask:space'])
     expect(pushPayload(alerts[0], { count: 1, tags: ['EX-1'] }).waits).toBe(true)
   } finally { f.close() }
 })

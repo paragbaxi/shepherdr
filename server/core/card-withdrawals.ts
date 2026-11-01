@@ -1,4 +1,4 @@
-import { askTag, clip } from '../../shared/alerts.ts'
+import { askTag } from '../../shared/alerts.ts'
 import type { Need } from '../../shared/types.ts'
 import { age } from '../common/age.ts'
 import { tag } from '../common/chatlines.ts'
@@ -20,6 +20,8 @@ const ENDED: Partial<Record<CardKind, string>> = {
 }
 
 const plain = (words: string) => words.replaceAll('<', '\\u003c')
+/** On one line and cut, its words as they are: `clip` drops markdown, and with it a name's underscores. */
+const shown = (words: string) => { const line = words.replace(/\s+/g, ' ').trim(); return line.length > TITLE_SHOWN ? `${line.slice(0, TITLE_SHOWN - 1)}…` : line }
 
 /**
  * An agent closing a card that no longer matters, so it stops counting. Every open card it can reach is one of
@@ -45,7 +47,7 @@ export class CoreCardWithdrawals {
     if (permission && !permission.native) return 'Permission'
     return need.question?.kind === 'Plan' ? 'Plan' : 'Question'
   }
-  private title(need: Need) { return clip(need.question?.title ?? `Secret: ${need.secret?.name}`, TITLE_SHOWN) }
+  private title(need: Need) { return shown(need.question?.title ?? `Secret: ${need.secret?.name}`) }
   list(agent: CoreAgent) {
     const open = this.open(agent)
     return {
