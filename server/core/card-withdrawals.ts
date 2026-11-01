@@ -84,6 +84,8 @@ export class CoreCardWithdrawals {
     this.source.clearAlert(need.chat, closed, newer ? id : need.task ?? askTag(need.place))
     this.source.emit('snapshot')
     const form = closing > 1 ? ` and the rest of its form, ${closing} cards in all` : ''
-    return `Withdrew ${kind.toLowerCase()} card: ${title}${form}${!other ? '' : told ? `\nIts agent in ${need.chat} is being told why.` : `\nIts agent in ${need.chat} isn't running, so it was not told.`}`
+    // Said here, where it's read just before the turn ends: a turn that just ends puts the task back on Needs you.
+    const next = !other && agent.role === 'task' && need.task ? `\nNothing left to do in this task? Run shepherdr todo ${need.task}, then end your turn: a turn that just ends shows Needs you.` : ''
+    return `Withdrew ${kind.toLowerCase()} card: ${title}${form}${next}${!other ? '' : told ? `\nIts agent in ${need.chat} is being told why.` : `\nIts agent in ${need.chat} isn't running, so it was not told.`}`
   }
 }

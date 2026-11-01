@@ -209,7 +209,9 @@ test('an agent that withdraws its own card and then ends its turn needs the huma
     f.source.core.current.connected = true
     f.source.agents.terminal = (() => ({ state: 'live', address: 't', status: { state: 'idle' } })) as unknown as typeof f.source.agents.terminal
     f.source.logs.waiting = () => true
-    await f.card(WORKER, 'withdraw', f.ask(WORKER), '--why', 'Answered in chat')
+    const out = await f.card(WORKER, 'withdraw', f.ask(WORKER), '--why', 'Answered in chat')
+    // What keeps it off Needs you is its own todo, which the command reminds it of as it goes.
+    expect(out).toContain('Run shepherdr todo EX-1, then end your turn')
     expect(f.source.tasks.get('EX-1')?.cardWithdrawnAt).toBeUndefined()
     expect(f.source.tasks.view(f.source.tasks.get('EX-1')!).status).toBe('need')
   } finally { f.close() }
@@ -225,7 +227,7 @@ test('with another card still open the task still needs the human, and keeps its
     await f.card('space', 'withdraw', first, '--why', 'Settled')
     expect(f.source.tasks.view(f.source.tasks.get('EX-1')!).status).toBe('need')
     expect(waiting(f.source.snapshot()).tags).toContain('EX-1')
-    expect(f.source.snapshot().needs.map(need => need.id)).toEqual([second])
+    expect(f.source.snapshot().needs.filter(need => need.chat === WORKER).map(need => need.id)).toEqual([second])
   } finally { f.close() }
 })
 
@@ -246,7 +248,7 @@ test('a coordinator saying which card it withdrew, by its question, is not askin
     f.source.core.current.connected = true
     f.source.agents.terminal = (() => ({ state: 'live', address: 't', status: { state: 'idle' } })) as unknown as typeof f.source.agents.terminal
     const id = f.ask('space', 'Which branch?')
-    await f.card('space', 'withdraw', id, '--why', 'Settled')
+    expect(await f.card('space', 'withdraw', id, '--why', 'Settled')).not.toContain('shepherdr todo')
     f.source.post('space', { id: 'said', who: 'agent', text: 'I withdrew the "Which branch?" card.', at: Date.now() + 1000 })
     expect(f.source.snapshot().needs).toEqual([])
     f.source.post('space', { id: 'also', who: 'agent', text: 'Gone: "Which branch?", and `Keep it?` too.', at: Date.now() + 1500 })

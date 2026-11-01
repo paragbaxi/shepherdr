@@ -107,7 +107,7 @@ chat, or says it no longer matters, withdraw it, so they never have to scroll ba
 - **A form goes whole.** Withdrawing one question of Claude's own form closes all of it, and the command says so.
 - **Who.** Your own chat's cards only; a reviewer has none to withdraw. On Autopilot it is refused: the human taps.
 - **After.** Nothing left to do in your task? `shepherdr todo <id>`, then end your turn: a turn that just ends shows
-  Needs you.
+  Needs you. The command reminds you.
 
 `<card-withdrawn card="…" by="coordinator">why</card-withdrawn>` says your coordinator withdrew one of your cards. Stop
 waiting for it: carry on without it, and ask again only if you still need it. With nothing to do without it, say so in
