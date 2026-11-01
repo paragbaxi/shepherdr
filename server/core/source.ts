@@ -48,6 +48,7 @@ import { CoreGitHub } from './github.ts'
 import { CorePlugins } from './plugins.ts'
 import { CoreUnread } from './unread.ts'
 import { CoreCards } from './cards.ts'
+import { CoreCardWithdrawals } from './card-withdrawals.ts'
 import { CorePilotMail } from './pilot-mail.ts'
 import { askText, clip, lastReply, quickChoices, TITLE_MAX, BODY_MAX } from '../../shared/alerts.ts'
 import { CANCELLED, hookEnd, logEnd, NativeEnds, STOPPED } from './native-ends.ts'
@@ -61,6 +62,7 @@ interface Machine { id: string; name: string; state: string; host?: string; vers
 interface Permission { id: string; chat: string; grant: string; question: Question; expires: number; settled?: boolean; allow?: boolean; at?: number; native?: NativeAsk; grants?: unknown[]; reply?: PermissionAnswer; tool?: string; hash?: string; turn?: string; sub?: string }
 /** the most of an agent's last words a card with no question carries: its card shows a few lines */
 const NEED_TEXT = 1000
+const WITHDRAWN_LINE_WAIT = 15_000
 interface PendingSend { id: string; chat: string; text: string; launch?: string; state: 'queued' | 'sending' | 'uncertain' | 'cancelled'; quiet?: boolean; work?: boolean; human?: boolean }
 
 /** Product state is Shepherdr's; terminals, machine commands, files and agent children are core's. */
@@ -90,6 +92,7 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
   readonly settings: CoreSettings
   readonly unread: CoreUnread
   readonly cards: CoreCards
+  readonly withdrawals: CoreCardWithdrawals
   readonly pilots: CorePilotMail
   plugins: CorePlugins
   pluginUpdates?: CorePluginUpdates
@@ -104,6 +107,8 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
   private local: { id: string; name: string }
   private machines: Machine[] = []
   private permissions = new Map<string, (answer: PermissionAnswer) => void>()
+  private withdrawnLines = new Map<string, { id: string; until: number }>()
+  private withdrawnLineTimer?: ReturnType<typeof setTimeout>
   private ends = new NativeEnds()
   private faults = new Map<string, string>()
   private hooks = new Map<Action['type'], (action: Action) => Promise<unknown>>()
@@ -140,6 +145,7 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
     this.screens = new CoreScreens(this)
     this.failedStarts = new CoreFailedStarts(this)
     this.cards = new CoreCards(this)
+    this.withdrawals = new CoreCardWithdrawals(this)
     this.secrets = new CoreSecrets(this)
     this.providerRetries = new CoreProviderRetries(this)
     this.artifacts = new CoreArtifacts(this, installation.id)
@@ -252,11 +258,23 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
     const terminal = this.agents.terminal(agent)
     if (terminal?.state === 'finished') return 'idle'
     if (agent.pid && terminal?.pid !== agent.pid) return 'need'
+    if (this.lineComing(agent.chat)) return 'work'
     const word = terminal?.status?.state ?? agent.state
     if (word === 'blocked') return 'need'
     const provider = this.providerRetries.get(agent)
     if (provider) return provider.over ? 'need' : 'work'
     return word === 'working' || word === 'starting' ? 'work' : 'idle'
+  }
+  /** A withdrawn card's line is on its way: until the agent takes it, for a moment at most, it isn't waiting on the human. */
+  private lineComing(chat: string) {
+    const coming = this.withdrawnLines.get(chat)
+    return !!coming && coming.until > Date.now() && ['queued', 'sending'].includes(this.store.get<PendingSend>('pending-send', coming.id)?.state ?? '')
+  }
+  sayWithdrawn(chat: string, id: string, text: string) {
+    this.saveAndDeliver(chat, id, text, () => this.withdrawnLines.set(chat, { id, until: Date.now() + WITHDRAWN_LINE_WAIT }), true)
+    // Nothing else may move once the wait is over, and what the agent then shows has to reach the screen.
+    clearTimeout(this.withdrawnLineTimer)
+    this.withdrawnLineTimer = setTimeout(() => this.emit('snapshot'), WITHDRAWN_LINE_WAIT + 100)
   }
   openPermissions(agent: CoreAgent) {
     return this.store.all<Permission>('permission').filter(item => item.chat === agent.chat && item.grant === agent.grant && !item.settled && item.expires > Date.now())
@@ -414,12 +432,20 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
       for (const card of this.nativeRows(permission.native.head)) this.expirePermission(card, reason)
       return
     }
-    this.permissions.get(permission.id)?.({ allow: false }); this.permissions.delete(permission.id)
+    this.permissions.get(permission.id)?.(permission.reply ?? { allow: false }); this.permissions.delete(permission.id)
+  }
+  /** Denied, never allowed, and saying so: the agent's own hook would otherwise tell it the human declined. False: no such prompt. */
+  withdrawPermission(id: string, reason: string) {
+    const permission = this.store.get<Permission>('permission', id)
+    if (!permission) return false
+    if (!permission.native) permission.reply = nativeClosed(reason)
+    this.expirePermission(permission, reason)
+    return true
   }
   /** A phone that showed this chat's card drops its alert and takes the new count, without a sound. */
-  clearAlert(chat: string, reason: string) {
-    const space = this.agents.get(chat)?.space, task = this.tasks.forChat(chat)
-    if (space) this.emit('alert', { id: randomUUID(), from: 'Shepherdr', title: 'No longer waiting', body: reason, go: { place: space }, tag: chat, ...(task ? { task: true as const } : {}), clear: true })
+  clearAlert(chat: string, reason: string, tag = chat) {
+    const task = this.tasks.forChat(chat), space = this.agents.get(chat)?.space ?? task?.place
+    if (space) this.emit('alert', { id: randomUUID(), from: 'Shepherdr', title: 'No longer waiting', body: reason, go: { place: space }, tag, ...(task ? { task: true as const } : {}), clear: true })
   }
   /** The agent's record follows its open cards; what ended a card may already have moved its state on. */
   private settleAgent(permission: Permission) {
@@ -494,6 +520,9 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
         return action.cid ? this.store.command(action.cid, action, run) : run()
       }
       case 'answer': {
+        // A late tap, from a stale screen or a phone's alert, changes nothing on a withdrawn card.
+        const withdrawn = this.store.get<Message>(`message:${action.chat}`, action.question)?.question?.closed
+        if (withdrawn?.startsWith('Withdrawn: ')) throw new Refusal(`This card has closed: ${withdrawn}`)
         if (await this.tasks.answer(action.question, action.choice, action.chat)) return { ok: true }
         if (await this.questions.answer(action)) return { ok: true }
         if (await this.screens.answer(action)) return { ok: true }
@@ -703,6 +732,7 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
   task review-more ID (coordinator only; one more review round once all are used)
   status ID TEXT --done 0..100 --left 5m|1h20m
   ask TITLE --choice LABEL --choice LABEL | plan [ID] --title TITLE --step TEXT --step TEXT
+  card list | card withdraw ID --why REASON (your own chat; a coordinator also its own space's tasks; answers nothing)
   review ID | pr ID | checks ID [--comments [--offset N] [--from nextFrom]]
   ready ID --summary TEXT [--facts TEXT]
   merge ID (follows the task's Merge setting; only "ask the human first" needs their yes on its card)
@@ -833,7 +863,7 @@ Use hc for starting, messaging and waiting on core child agents. Never use a web
   }
   watch(_chats: string[], _terms: string[]) {}
   private deliveryNotice(item: PendingSend, uncertain = false) {
-    if (item.quiet && !uncertain || item.id.startsWith('restart-denied-')) return
+    if (item.quiet && !uncertain || item.id.startsWith('restart-denied-') || item.id.startsWith('card-withdrawn-')) return
     this.post(item.chat, { id: `delivery-${item.id}`, who: 'agent', text: item.quiet ? 'Browser handoff was not confirmed. Check with the agent before letting it use the browser.' : uncertain
       ? 'Shepherdr could not confirm delivery of your saved answer. Check with the agent before answering again; it will not be sent to a replacement session.'
       : 'Shepherdr saved your answer and is waiting for the agent to receive it.', at: Date.now() })
@@ -865,5 +895,5 @@ Use hc for starting, messaging and waiting on core child agents. Never use a web
   async upload(chat: string, name: string, data: Uint8Array) { return this.chats.upload(chat, name, data) }
   async attachment(chat: string, path: string) { return this.chats.attachment(chat, path) }
   async drain() { this.quiescing = true; this.screens.stop(); this.failedStarts.stop(); this.pluginUpdates?.stop(); await this.pluginUpdates?.drain(); this.plugins.stop(); this.voices.stop(); this.automations.stop(); this.github.stop(); this.health.stop(); this.limits.stop(); await this.github.drain(); await this.health.drain(); await this.limits.drain(); await this.automations.drain(); await this.pilots.usage.drain(); await this.pilots.lifecycle.drain(); await this.pilots.completion.drain(); return this.tasks.drain() }
-  stop() { clearInterval(this.recovery); this.screens.stop(); this.failedStarts.stop(); this.pluginUpdates?.stop(); this.plugins.stop(); this.voices.stop(); this.health.stop(); this.limits.stop(); this.automations.stop(); this.github.stop(); this.logs.stop(); this.browsers.stop(); this.core.stop() }
+  stop() { clearInterval(this.recovery); clearTimeout(this.withdrawnLineTimer); this.screens.stop(); this.failedStarts.stop(); this.pluginUpdates?.stop(); this.plugins.stop(); this.voices.stop(); this.health.stop(); this.limits.stop(); this.automations.stop(); this.github.stop(); this.logs.stop(); this.browsers.stop(); this.core.stop() }
 }

@@ -18,4 +18,27 @@ describe.skipIf(!browser)('closed question history', () => {
       expect(await card.textContent()).toContain('Permission request expired')
     } finally { chat.messages = old; await page.close() }
   })
+  for (const [name, viewport] of [['phone', { width: 390, height: 844 }], ['desktop', { width: 1280, height: 800 }]] as const) {
+    test(`withdrawn question and secret cards say why, with nothing left to tap (${name})`, async () => {
+      const chat = world.chats['p:vm-str:~'], old = chat.messages
+      chat.messages = [...old,
+        { id: 'withdrawn-question', who: 'agent', at: Date.now(), question: { id: 'withdrawn-q', kind: 'Question', title: 'Rerun CI?', choices: [{ label: 'Rerun it' }, { label: 'Leave it' }], to: 'Agent', sent: -1, said: 'Withdrawn: Answered in chat', closed: 'Withdrawn: Answered in chat' } },
+        { id: 'withdrawn-secret', who: 'agent', at: Date.now(), secret: { id: 'withdrawn-s', name: 'DEMO_KEY', why: 'To deploy', levels: [{ id: 'all', label: 'Everywhere' }], closed: 'Withdrawn: Deploy is off' } },
+      ]
+      const page = await browser!.newPage({ viewport })
+      page.setDefaultTimeout(5000)
+      try {
+        await page.goto(url())
+        const question = page.locator('[data-whole="withdrawn-question"]')
+        await question.getByText('Withdrawn: Answered in chat').waitFor()
+        expect(await question.getByRole('button', { name: 'Rerun it', exact: true }).isDisabled()).toBe(true)
+        expect(await question.getByRole('button', { name: 'Send', exact: true }).count()).toBe(0)
+        const secret = page.locator('[data-whole="withdrawn-secret"]')
+        await secret.getByText('Withdrawn: Deploy is off').waitFor()
+        expect(await secret.getByText('Closed', { exact: true }).count()).toBe(1)
+        expect(await secret.locator('input').count()).toBe(0)
+        expect(await secret.getByRole('button', { name: 'Save', exact: true }).count()).toBe(0)
+      } finally { chat.messages = old; await page.close() }
+    })
+  }
 })

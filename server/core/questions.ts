@@ -24,6 +24,16 @@ export class CoreQuestions {
       this.source.clearAlert(chat, row.question.said)
     }
   }
+  /** Closed with no answer: nothing reaches the agent as its answer, and a plan stays unapproved. */
+  withdraw(id: string, closed: string) {
+    const row = this.source.store.get<SavedQuestion>('question', id)
+    if (!row || row.answered) throw new Refusal('This card is no longer open')
+    row.answered = true; row.question.sent = -1; row.question.said = closed; row.question.closed = closed
+    this.source.store.set('question', id, row)
+    const message = this.source.store.get<Message>(`message:${row.chat}`, id)
+    this.source.post(row.chat, { ...message, id, who: 'agent', question: row.question, at: message?.at ?? Date.now() })
+    this.source.forwardQuestion(row.chat, row.question, closed, 'No longer waiting')
+  }
   create(grant: Grant, args: string[]) {
     const agent = this.source.agents.get(grant.chat)
     if (!agent || agent.role === 'reviewer') throw new Refusal('This session cannot ask workflow questions')

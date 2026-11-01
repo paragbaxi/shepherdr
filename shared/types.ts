@@ -458,6 +458,8 @@ export interface SecretAsk {
   levels: { id: string; label: string }[]
   /** saved: where, by its level's name */
   saved?: string
+  /** withdrawn with nothing saved: why; its masked box is gone */
+  closed?: string
 }
 
 /** what kind of step a tool call is, for its icon and its row */

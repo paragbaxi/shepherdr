@@ -58,7 +58,7 @@ A login that cannot work in the isolated runtime needs the human; it never falls
 
 The gateway fixes command chat/cwd identity itself. A caller cannot choose another task, secret scope or permission
 profile. Secret values use the existing masked CLI flow, only for names explicitly in this profile. Settings,
-deleting tasks, unrelated work and host-file artifacts require the human. Merges require human approval by default;
+deleting tasks, withdrawing cards, unrelated work and host-file artifacts require the human. Merges require human approval by default;
 choosing `none` permits managed-task merges while each task brief's merge policy still applies. Workers save a
 commit using `shepherdr checkpoint "message"`; this broker operation stages their worktree and commits with hooks, filters, custom Git credential helpers
 and filesystem monitors disabled. Broker Git uses normal SSH configuration or the authenticated GitHub account;

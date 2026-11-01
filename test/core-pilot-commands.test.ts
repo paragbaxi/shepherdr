@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CoreSource } from '../server/core/source.ts'
+import { CoreCommands } from '../server/core/commands.ts'
 import type { CoreTask } from '../server/core/tasks.ts'
 import type { CoreAgent } from '../server/core/model.ts'
 
@@ -21,6 +22,17 @@ function fixture() {
   return { source, run, grant, agent, task, cli, close() { source.stop(); source.mailbox.close(); source.store.close(); rmSync(home, { recursive: true, force: true }) } }
 }
 
+test('contained agents are offered no card command, and the regular route refuses them too', async () => {
+  const f = fixture()
+  try {
+    expect((await f.cli('help')).out).not.toContain('card list')
+    await expect(f.cli('card', 'list')).rejects.toThrow('needs the human')
+    const id = f.source.questions.create(f.grant, ['ask', 'Continue?', '--choice', 'Yes'])
+    await expect(f.cli('card', 'withdraw', id, '--why', 'Settled')).rejects.toThrow('needs the human')
+    await expect(new CoreCommands(f.source).cli(f.agent, f.grant, ['card', 'withdraw', id, '--why', 'Settled'])).rejects.toThrow('no longer current')
+    expect(f.source.questions.open().map(row => row.id)).toEqual([id])
+  } finally { f.close() }
+})
 test('contained task commands use durable ownership, never caller labels or another run’s task', async () => {
   const f = fixture()
   try {

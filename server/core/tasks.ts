@@ -4,7 +4,7 @@ import { CoreError, Refusal } from './client.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
-import { SUMMARY_MAX, TITLE_MAX, STATUS_MAX, slugify, type Action, type MergeEvidence, type Question, type Task } from '../../shared/types.ts'
+import { SUMMARY_MAX, TITLE_MAX, STATUS_MAX, slugify, type Action, type MergeEvidence, type Message, type Question, type Task } from '../../shared/types.ts'
 import { CorePilotRepositories } from './pilot-repositories.ts'
 import { CoreTaskRelocation } from './task-relocation.ts'
 import { CoreTaskProcesses } from './task-processes.ts'
@@ -498,6 +498,20 @@ export class CoreTasks {
     if (message) this.source.post(chat, { ...message, id: question, who: 'agent', question: { ...message.question, sent: choice }, at: Date.now() })
     this.save(task)
     return true
+  }
+  /** Closes the card and approves nothing: the merge stays refused until a fresh ready report gets a human's yes. */
+  async withdrawMerge(question: string, closed: string) {
+    const request = this.source.store.get<{ task: string }>('merge-question', question)
+    if (!request) throw new Refusal('This card is no longer open')
+    return this.change(request.task, async () => {
+      const task = this.get(request.task)
+      if (!task || task.mergeQuestion !== question || !this.source.store.get('merge-question', question)) throw new Refusal('This card is no longer open')
+      this.source.store.delete('merge-question', question)
+      delete task.mergeQuestion; delete task.approvedHead
+      const message = this.source.store.get<Message>(`message:${task.chat}`, question)
+      if (message?.question) this.source.post(task.chat, { ...message, question: { ...message.question, sent: -1, said: closed, closed } })
+      this.save(task)
+    })
   }
   async merge(grant: Grant, id: string) {
     if (this.source.quiescing) throw new Refusal('Shepherdr is stopping; retry after it restarts')

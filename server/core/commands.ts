@@ -25,7 +25,7 @@ export class CoreCommands {
     return space?.id ?? (parsed.flags.has('machine') ? `m:${agent.machine}` : fallback)
   }
   async cli(agent: CoreAgent, grant: Grant, args: string[]) {
-    if (!['show', 'models', 'set', 'unset', 'alert'].includes(args[0])) return undefined
+    if (!['show', 'models', 'set', 'unset', 'alert', 'card'].includes(args[0])) return undefined
     this.current(agent, grant)
     const parsed = parseArgs(args), [command, ...words] = parsed.words
     const result = (out: string) => {
@@ -50,6 +50,13 @@ export class CoreCommands {
         ...(task && (agent.role === 'task' || !!question || status === 'need' || status === 'ready') ? { tag: task.id, task: true as const } : {}),
         ...(task && question ? { card: { chat: task.chat, question: question.id, choices: quickChoices(question) } } : {}) })
       return result('Alert sent')
+    }
+    if (command === 'card') {
+      if (agent.role === 'reviewer') throw new Refusal('A reviewer reports findings in its final reply')
+      const [verb, id, ...more] = words, options = Object.keys(parsed.opts)
+      if (verb === 'list' && !id && !parsed.flags.size && !options.length) return result(JSON.stringify(this.source.withdrawals.list(agent), null, 2))
+      if (verb === 'withdraw' && id && !more.length && !parsed.flags.size && options.every(key => key === 'why')) return result(await this.source.withdrawals.withdraw(agent, id, one(parsed, 'why') ?? ''))
+      throw new Refusal('Use card list, or card withdraw ID --why "short reason"')
     }
     if (Object.keys(parsed.opts).some(key => !['space', 'section'].includes(key)) || [...parsed.flags].some(key => key !== 'machine')) throw new Refusal('Use --space NAME or --machine for settings')
     if (command === 'models') {

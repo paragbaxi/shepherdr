@@ -1,4 +1,5 @@
 import { line } from '../common/chatlines.ts'
+import { askTag } from '../../shared/alerts.ts'
 import { machineName } from '../../shared/types.ts'
 import { Refusal } from './client.ts'
 import { randomUUID } from 'node:crypto'
@@ -22,6 +23,14 @@ export class CoreSecrets {
       this.source.store.set(`message:${chat}`, request.id, { id: request.id, who: 'agent', text: request.grant === this.source.agents.get(chat)?.grant ? `The task is done, so the request for ${request.ask.name} is closed.` : `The request for ${request.ask.name} belonged to the previous session. Ask again if it is still needed.`, at: Date.now() })
       this.source.clearAlert(chat, `${request.ask.name} is no longer needed`)
     }
+  }
+  /** Its masked box goes and nothing is saved; a late save from a stale screen is refused in act. */
+  withdraw(id: string, closed: string) {
+    const request = this.source.store.get<Request>('secret-request', id)
+    if (!request) throw new Refusal('This card is no longer open')
+    const message = this.source.store.get<Message>(`message:${request.chat}`, id)
+    this.source.store.delete('secret-request', id)
+    this.source.post(request.chat, { ...message, id, who: 'agent', secret: { ...request.ask, closed }, at: message?.at ?? Date.now() })
   }
   private name(level: string) { return level === 'all' ? 'Everywhere' : level.startsWith('m:') ? machineName(this.source.snapshot().machines, level.slice(2)) : this.source.space(level)?.name || level }
   private level(level: string) {
@@ -55,7 +64,9 @@ export class CoreSecrets {
     const id = randomUUID(), ask: SecretAsk = { id, name, why: one(parsed, 'why'), levels: this.chain(agent).map(level => ({ id: level, label: this.name(level) })) }
     this.source.store.set('secret-request', id, { id, chat: agent.chat, grant: agent.grant, ask } satisfies Request)
     this.source.post(agent.chat, { id, who: 'agent', secret: ask, at: Date.now() })
-    this.source.emit('alert', { id, from: this.source.space(agent.space)?.name || 'Shepherdr', title: `${name} needed`, body: ask.why || 'Give it in the masked box', go: { place: agent.space, task: this.source.tasks.forChat(agent.chat)?.id, focus: id }, ...(agent.role === 'task' ? { task: true } : {}) })
+    // Tagged like every other card's alert: a phone drops it once this no longer waits.
+    const task = this.source.tasks.forChat(agent.chat)
+    this.source.emit('alert', { id, from: this.source.space(agent.space)?.name || 'Shepherdr', title: `${name} needed`, body: ask.why || 'Give it in the masked box', go: { place: agent.space, task: task?.id, focus: id }, tag: task?.id || askTag(agent.space), ...(agent.role === 'task' ? { task: true } : {}) })
     return `Asked for ${name} in a masked box. End your turn; wait for the secret-saved line. Never ask for its value in chat.`
   }
   use(agent: CoreAgent, input: unknown) {
@@ -72,6 +83,8 @@ export class CoreSecrets {
     if (action.type === 'secret-saved') throw new Refusal('Save the secret through its masked box')
     this.level(action.level)
     if (action.card) {
+      const closed = this.source.store.get<Message>(`message:${action.card.chat}`, action.card.id)?.secret?.closed
+      if (closed) throw new Refusal(`This card has closed, so nothing was saved: ${closed}`)
       const request = this.source.store.get<Request>('secret-request', action.card.id)
       if (!request || request.chat !== action.card.chat || request.ask.name !== action.name || request.grant !== this.source.agents.get(request.chat)?.grant || !request.ask.levels.some(level => level.id === action.level)) throw new Refusal('This secret request belongs to an expired session or another scope')
     }

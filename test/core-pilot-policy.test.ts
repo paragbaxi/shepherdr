@@ -26,6 +26,13 @@ test('private run ownership survives app reconstruction and replaces only the re
   expect(() => resumed.actor(run.id, worker, 101)).toThrow('belong')
   expect(resumed.actor(run.id, coordinator, 101).state).toBe('on')
 }))
+test('contained agents get no reach over cards: not their own, not a worker’s, not even the list', () => fixture(policy => {
+  const run = policy.begin('space', 'machine', config, 100)
+  policy.activate(run.id, coordinator); policy.claim(run.id, worker.task!, 0, 100); policy.bind(run.id, worker)
+  for (const actor of [coordinator, worker]) for (const words of [['card', 'list'], ['card', 'withdraw', 'some-card', '--why', 'Settled']]) {
+    expect(() => policy.command(run.id, actor, words, 101)).toThrow('needs the human')
+  }
+}))
 test('workers share durable traffic and token deltas across reconstructions and cannot bypass a failed budget', () => fixture((policy, store) => {
   const run = policy.begin('space', 'machine', config, 100)
   policy.activate(run.id, coordinator); policy.claim(run.id, worker.task!, 0, 100); policy.bind(run.id, worker)

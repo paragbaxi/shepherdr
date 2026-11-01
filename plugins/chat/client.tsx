@@ -1503,8 +1503,8 @@ export function SecretCard({ ask, chat, source }: { ask: SecretAsk; chat: Chat; 
       const r = (await act({ type: 'secret', level, name: ask.name, value, card: { chat: chat.key, id: ask.id } })) as { ok?: boolean; error?: string }
       if (r?.ok === false) setErr(r.error ?? "That didn't go through.")
       else setValue('')
-    } catch {
-      setErr("That didn't go through: Shepherdr can't be reached.")
+    } catch (e) {
+      setErr(reasonOf(e))
     } finally {
       setBusy(false)
     }
@@ -1516,6 +1516,12 @@ export function SecretCard({ ask, chat, source }: { ask: SecretAsk; chat: Chat; 
         <Sent>
           <CheckIcon className={ic} />
           <span className="min-w-0 truncate">Saved for {ask.saved}</span>
+        </Sent>
+      ) : ask.closed ? (
+        <Sent className="text-fg2!">
+          <XIcon className={ic} />
+          <span className="shrink-0">Closed</span>
+          <span className="min-w-0 text-pretty text-fg2">{ask.closed}</span>
         </Sent>
       ) : (
         <>

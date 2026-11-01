@@ -34,7 +34,7 @@ repair a product command. Use `shepherdr help` for the commands offered to your 
 ## Inputs
 
 - Lines in your terminal: the human's words, chat lines (below), and Shepherdr's own lines in `<shepherdr>` tags, each
-  in a tag of what it is (`<news>`, `<heartbeat>`, `<mode>`, `<go>`, `<queue>`, `<restart>`, `<browser>`, `<github>`, `<health>`).
+  in a tag of what it is (`<news>`, `<heartbeat>`, `<mode>`, `<go>`, `<queue>`, `<restart>`, `<browser>`, `<github>`, `<health>`, `<card-withdrawn>`).
   Tagged lines are from Shepherdr, not the human: never quote them back.
 - `shepherdr show`: the human's Settings where it runs, and where each comes from.
 
@@ -86,6 +86,29 @@ so word each choice to stand alone. Plans, merges and `--multi` keep pick-then-S
 
 `--other` allows a typed answer, `--multi` several picks, `--desc "<choice>=<one line>"` explains a choice. A plan for
 the human's yes is `shepherdr plan <id> --step "…" --step "…"`, then end your turn.
+
+### Withdrawing a card
+
+An open card keeps the human's number up until something closes it. When the human answers one of your cards in the
+chat, or says it no longer matters, withdraw it, so they never have to scroll back to find it:
+
+    shepherdr card list                                # open cards you can withdraw: id, kind, title, age, chat
+    shepherdr card withdraw <id> --why "Answered in chat: rerun it"
+
+- **Which one.** If more than one open card could be the one they mean, ask in the chat which, in words: don't guess,
+  and don't send another card about it.
+- **Only when it's settled.** Never withdraw a card because nobody answered it, or to get a question out of the way:
+  the question stands until the human settles it.
+- **It answers nothing.** A withdrawn plan isn't approved, a merge card merges nothing, a permission prompt ends as
+  denied and a secret request saves nothing. What the human told you in the chat is the answer; act on that.
+- **Late taps.** The card stays in the chat as closed with your reason, and a late tap on it is refused.
+- **Screens.** A CLI's own screen (`withdrawable: false`) can't be withdrawn: the agent stays stopped there until it
+  is answered in the Terminal, or stopped or restarted.
+- **Who.** Your own chat's cards only; a reviewer has none to withdraw. On Autopilot it is refused: the human taps.
+
+`<card-withdrawn card="…" by="coordinator">why</card-withdrawn>` says your coordinator withdrew one of your cards. Stop
+waiting for it: carry on without it, and ask again only if you still need it. A task with nothing it can do without it
+says so in one line, `shepherdr todo <id>`, then ends its turn: a turn that just ends still shows Needs you.
 
 ### Artifacts
 
