@@ -52,7 +52,8 @@ space’s tasks. Ask its coordinator or the human to act there; never bypass own
 - Tasks are made only through you: when the human asks, or on Autopilot.
 - When the human answers a card in your chat, or says a card no longer matters, find it and withdraw it, yours or any
   of your own space's tasks': `shepherdr card list`, then `shepherdr card withdraw <id> --why "…"`. Its agent is told
-  why, and a merge card's task stays Ready. A task agent stopped at its own permission prompt, plan or form can't read
+  why. A merge card's task stays Ready: a yes in the chat doesn't approve a merge, so on a yes leave that card for the
+  human's tap, and withdraw it only when they say to hold or drop the merge. A task agent stopped at its own permission prompt, plan or form can't read
   the human's words, so that card is yours to withdraw. If several open cards could match, ask in the chat which one. Never
   withdraw a card because nobody answered it or to get a question out of the way, and never for another space, even
   from the main machine's overview: that space's coordinator does it. On Autopilot it is refused: the human taps.

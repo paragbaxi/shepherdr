@@ -181,15 +181,21 @@ test('a coordinator withdraws a task agent’s card: that agent is told why, and
     expect(view()).toBe('need')
     f.source.store.delete(`message:${WORKER}`, 'asking')
     expect(view()).toBe('todo')
-    // Any work since ends as any other turn does, however quick.
+    // Any work since ends this for good, however quick: the next turn ends as any other does.
     f.source.store.set(`event:${WORKER}`, 'step-one', { kind: 'step', id: 'step-one', at: Date.now() + 1000, step: 'run', tool: 'Bash' })
+    f.source.logs['revisions'].set(WORKER, 1)
     expect(view()).toBe('need')
+    expect(f.source.tasks.get('EX-1')?.cardWithdrawnAt).toBeUndefined()
     f.source.store.delete(`event:${WORKER}`, 'step-one')
-    expect(view()).toBe('todo')
+    expect(view()).toBe('need')
     // A secret asked for since, even one already answered, ends it too.
+    f.source.tasks.noteWithdrawn(WORKER)
+    expect(view()).toBe('todo')
     f.source.post(WORKER, { id: 'later-secret', who: 'agent', secret: { id: 'later-secret', name: 'LATER_KEY', levels: [] }, at: Date.now() + 1500 })
     expect(view()).toBe('need')
+    expect(f.source.tasks.get('EX-1')?.cardWithdrawnAt).toBeUndefined()
     f.source.store.delete(`message:${WORKER}`, 'later-secret')
+    f.source.tasks.noteWithdrawn(WORKER)
     expect(view()).toBe('todo')
     // A new card asks again.
     f.ask(WORKER, 'One more?', Date.now() + 2000)
@@ -300,8 +306,25 @@ test('a withdrawn merge card merges nothing, and the task stays Ready until a fr
     await expect(f.source.act({ type: 'answer', chat: WORKER, question: q.id, choice: 0 })).rejects.toThrow('This card has closed')
     expect(f.source.tasks.get('EX-1')!.approvedHead).toBeUndefined()
     await expect(f.source.tasks.merge(f.grant(WORKER), 'EX-1')).rejects.toThrow('must approve')
-    expect(f.lines()[0].text).toContain('Nothing was merged or approved')
+    expect(f.lines()[0].text).toContain('Nothing was merged or approved. Report ready again only when the human wants it merged')
+    expect(f.lines()[0].text).not.toContain('ask again only if')
     expect(f.answers()).toEqual([])
+  } finally { f.close() }
+})
+
+test('an agent that withdraws its own merge card keeps its task Ready, and hears how to ask again', async () => {
+  const f = fixture(), head = 'a'.repeat(40)
+  try {
+    const task = f.source.tasks.get('EX-1')!, q: Question = { id: 'merge-own', title: 'Merge EX-1?', kind: 'Question', choices: [{ label: 'Merge' }, { label: 'Not yet' }], to: WORKER }
+    Object.assign(task, { workflow: 'ready', readyHead: head, mergePolicy: 'ask', mergeQuestion: q.id })
+    f.source.store.set('task', task.id, task); f.source.store.set('merge-question', q.id, { task: task.id, head })
+    f.source.post(WORKER, { id: q.id, who: 'agent', question: q, at: 100 })
+    const out = await f.card(WORKER, 'withdraw', q.id, '--why', 'Holding this for now')
+    expect(out).toContain('Report ready again only when the human wants it merged')
+    expect(out).not.toContain('shepherdr todo')
+    expect(f.source.tasks.get('EX-1')?.workflow).toBe('ready')
+    expect(f.source.tasks.view(f.source.tasks.get('EX-1')!).status).toBe('ready')
+    expect(f.lines()).toEqual([])
   } finally { f.close() }
 })
 
@@ -369,9 +392,12 @@ test('a withdrawn secret request saves nothing, keeps its closed card, and a lat
     const own = f.source.agents.get(WORKER)!
     await f.source.secrets.cli(own, ['secret', 'ask', 'DEMO_KEY', '--why', 'To deploy'])
     const id = f.source.secrets.open(WORKER)[0].id, before = f.count()
+    // Its row in the coordinator's chat said it needs the human, as a task's news leaves it.
+    f.source.taskRow('space', f.source.tasks.get('EX-1')!, { status: 'need', text: 'Needs you' })
     expect((await f.cards('space')).cards[0]).toMatchObject({ id, kind: 'Secret', title: 'Secret: DEMO_KEY', chat: WORKER })
     await f.card('space', 'withdraw', id, '--why', 'Deploy is off')
     expect(f.count()).toBe(before - 1)
+    expect(f.source.chat('space')!.messages.find(message => message.card?.task === 'EX-1')?.card?.text).toBe('No longer waiting')
     expect(f.source.secrets.open(WORKER)).toEqual([])
     const message = f.shown(WORKER, id)
     expect(message?.secret).toMatchObject({ name: 'DEMO_KEY', closed: 'Withdrawn: Deploy is off' })
@@ -419,6 +445,18 @@ test('the phone’s alert goes with its card and takes the new count, unless a n
     alerts.length = 0
     await f.card('space', 'withdraw', f.ask('space', 'Mine?'), '--why', 'Settled')
     expect(clears()[0]).toMatchObject({ tag: 'ask:space' })
+  } finally { f.close() }
+})
+
+test('withdrawing a prompt leaves the alert of another card still open', async () => {
+  const f = fixture()
+  try {
+    const alerts: Alert[] = []
+    f.source.on('alert', alert => alerts.push(alert as Alert))
+    f.ask(WORKER, 'Older?', 100)
+    const asked = f.permission(WORKER, 'Bash', { command: 'ls' })
+    await f.card('space', 'withdraw', asked.id, '--why', 'Settled')
+    expect(alerts.filter(alert => alert.clear).map(alert => alert.tag)).toEqual([WORKER, asked.id])
   } finally { f.close() }
 })
 

@@ -101,17 +101,22 @@ chat, or says it no longer matters, withdraw it, so they never have to scroll ba
   the question stands until the human settles it.
 - **It answers nothing.** A withdrawn plan isn't approved, a merge card merges nothing, a permission prompt ends as
   denied and a secret request saves nothing. What the human told you in the chat is the answer; act on that.
+- **Merge cards.** Only the merge card approves a merge: a yes in the chat doesn't count, so point the human to the card
+  and leave it open. Withdraw it only when they say to hold or drop the merge. The task stays Ready; report ready again
+  only when they want it merged, which asks them again.
 - **Late taps.** The card stays in the chat as closed with your reason, and a late tap on it is refused.
 - **Screens.** A CLI's own screen (`withdrawable: false`) can't be withdrawn: the agent stays stopped there until it
   is answered in the Terminal, or stopped or restarted.
 - **A form goes whole.** Withdrawing one question of Claude's own form closes all of it, and the command says so.
-- **Who.** Your own chat's cards only; a reviewer has none to withdraw. On Autopilot it is refused: the human taps.
-- **After.** Nothing left to do in your task? `shepherdr todo <id>`, then end your turn: a turn that just ends shows
-  Needs you. The command reminds you.
+- **Who.** Your own chat's cards only, and a coordinator also its own space's tasks'; a reviewer has none to withdraw. On
+  Autopilot it is refused: the human taps.
+- **After.** Nothing left to do in a task that is working? `shepherdr todo <id>`, then end your turn: a turn that just
+  ends shows Needs you. The command reminds you.
 
 `<card-withdrawn card="…" by="coordinator">why</card-withdrawn>` says your coordinator withdrew one of your cards. Stop
 waiting for it: carry on without it, and ask again only if you still need it. With nothing to do without it, say so in
-one line and end your turn: the task shows To do until the human next writes, unless your last words ask them something.
+one line and end your turn: the task shows To do until the human next writes, unless you took a step first or your last
+words ask them something. A withdrawn merge card leaves the task Ready: see Merge cards above.
 
 ### Artifacts
 

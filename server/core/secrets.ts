@@ -31,6 +31,9 @@ export class CoreSecrets {
     const message = this.source.store.get<Message>(`message:${request.chat}`, id)
     this.source.store.delete('secret-request', id)
     this.source.post(request.chat, { ...message, id, who: 'agent', secret: { ...request.ask, closed }, at: message?.at ?? Date.now() })
+    // A secret has no copy in its coordinator's chat, only the task's row, which may still say it needs you.
+    const task = this.source.tasks.forChat(request.chat)
+    if (task && this.source.store.get(`message:${task.place}`, `task-row-${task.id}`)) this.source.taskRow(task.place, task, { status: this.source.tasks.view(task).status, text: 'No longer waiting' })
   }
   private name(level: string) { return level === 'all' ? 'Everywhere' : level.startsWith('m:') ? machineName(this.source.snapshot().machines, level.slice(2)) : this.source.space(level)?.name || level }
   private level(level: string) {

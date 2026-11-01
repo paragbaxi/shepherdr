@@ -146,12 +146,18 @@ export class CoreTasks {
     return { ...task, ...(reviewLine ? { waitsFor: 'review' as const, report: task.report && { ...task.report, msg: reviewLine } } : {}), age: taskAge, on: CLI_NAME[agent?.kind ?? task.kind], status, sub: task.capacity ? `Waiting: ${task.capacity}` : retryLine || reviewLine || task.sub, browser: agent?.browser ? { ready: this.source.machineConnected?.(task.machine) ?? true, hint: this.source.machineConnected?.(task.machine) === false ? 'This machine is reconnecting' : undefined } : { ready: false, hint: 'Start or restart the task agent to provision its shared browser' }, agent: agent ? { chat: task.chat, role: 'Agent', cli: CLI_NAME[agent.kind], status: nativeStatus === 'off' ? 'off' : status, running: !!terminal && terminal.state !== 'finished', age: agentAge, note: retryLine || reviewLine || task.report?.msg || '' } : undefined,
       state: status === 'done' ? task.workflow === 'closed' ? 'Done' : 'Merged' : status === 'ready' ? 'Ready' : status === 'need' ? 'Needs you' : status === 'queued' ? 'Queued' : status === 'todo' ? 'To do' : status === 'merging' ? 'Merging' : 'Working' }
   }
-  /** Woken only to hear its coordinator withdrew its card, it has done nothing and asks nothing: no wait on the human. Any step, new card or word from them ends this: then it ends as any other turn does. */
+  /** Woken only to hear its coordinator withdrew its card, it has done nothing and asks nothing: no wait on the human. Any step, new card or word from them ends this for good: from then on its turns end as any other does. */
   private settledByWithdrawal(task: CoreTask) {
     const at = task.cardWithdrawnAt
-    if (!at || this.source.store.all<LogEvent>(`event:${task.chat}`).some(event => event.kind === 'step' && event.at > at)) return false
+    if (!at) return false
     const since = this.source.logs.messages(task.chat).filter(message => (message.at ?? 0) > at)
-    return !since.some(message => message.who === 'you' || message.question || message.secret) && !this.asks(since.findLast(message => message.text))
+    if (since.some(message => message.who === 'you' || message.question || message.secret) || this.source.logs.steppedSince(task.chat, at)) {
+      // The caller's copy may be an old one: never write that back.
+      const current = this.get(task.id)
+      if (current) { delete current.cardWithdrawnAt; this.source.store.set('task', current.id, current) }
+      return false
+    }
+    return !this.asks(since.findLast(message => message.text))
   }
   noteWithdrawn(chat: string) {
     const task = this.forChat(chat)

@@ -21,6 +21,7 @@ interface CleanupReceipt { launch: string; receipt: string; seen: boolean; compl
 export class CoreLogs {
   private revisions = new Map<string, number>()
   private waits = new Map<string, { launch: string; started: number; activity: number; revision: number; waiting: boolean }>()
+  private steps = new Map<string, { at: number; revision: number; stepped: boolean }>()
   private hooks = new Map<string, Cursor>()
   private logs = new Map<string, Cursor>()
   private reading = new Map<string, Promise<void>>()
@@ -104,6 +105,14 @@ export class CoreLogs {
     this.store.set('native-waiting', agent.chat, { launch: agent.launch, started: agent.started, path: agent.transcript, activity: agent.activityAt ?? agent.started, waiting } satisfies WaitingSnapshot)
     this.waits.set(agent.chat, { launch: agent.launch, started: agent.started, activity: agent.activityAt ?? agent.started, revision, waiting })
     return waiting
+  }
+  /** Has this chat's agent taken a step since then? Read again only once its events change, as waiting is. */
+  steppedSince(chat: string, at: number) {
+    const revision = this.revisions.get(chat) ?? 0, old = this.steps.get(chat)
+    if (old?.at === at && old.revision === revision) return old.stepped
+    const stepped = this.store.all<LogEvent>(`event:${chat}`).some(event => event.kind === 'step' && event.at > at)
+    this.steps.set(chat, { at, revision, stepped })
+    return stepped
   }
   outgoing(chat: string, message: Message) { this.store.set(`message:${chat}`, message.id, message); if (message.who !== 'you') this.incoming(chat, message); this.changed(chat) }
 
