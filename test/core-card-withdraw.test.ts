@@ -151,7 +151,7 @@ test('a coordinator withdraws a task agent’s card: that agent is told why, and
     const before = f.count()
     const out = await f.card('space', 'withdraw', id, '--why', 'The <human> settled it.')
     expect(out).toContain(`Its agent in ${WORKER} was told why`)
-    expect(view()).toBe('work')
+    expect(view()).toBe('todo')
     expect(f.count()).toBe(before - 1)
     expect(f.source.snapshot().needs.filter(need => need.chat === WORKER)).toEqual([])
     const [line] = f.lines()
@@ -163,14 +163,50 @@ test('a coordinator withdraws a task agent’s card: that agent is told why, and
     expect(line.text).not.toContain('<title')
     await Bun.sleep(1)
     expect(sent).toEqual([line.text])
-    // A line is not a human's message, and a delivery that fails doesn't say it was a browser handoff.
-    f.source.store.delete('pending-send', line.id)
+    // It wakes, says it has stopped and ends its turn: that brings the number back to nobody.
+    const says = (id: string, who: 'agent' | 'you', text: string) => f.source.post(WORKER, { id, who, text, at: Date.now() + 1000 })
+    says('stopping', 'agent', 'Understood, the "Rerun CI?" card is gone and `Keep it?` too, so I am stopping here.')
+    expect(view()).toBe('todo')
+    expect(f.count()).toBe(before - 1)
+    // Its last words ask the human something: that is a real wait.
+    says('asking', 'agent', 'Should I stop here instead?')
+    expect(view()).toBe('need')
+    f.source.store.delete(`message:${WORKER}`, 'asking')
+    expect(view()).toBe('todo')
+    // Work that goes on for long ends as any other turn does.
+    const own = f.source.agents.get(WORKER)!
+    f.source.store.set('agent', WORKER, { ...own, activityAt: Date.now() + 6 * 60_000 })
+    expect(view()).toBe('need')
+    f.source.store.set('agent', WORKER, own)
+    expect(view()).toBe('todo')
+    // A new card asks again.
+    f.ask(WORKER, 'One more?', Date.now() + 2000)
+    expect(view()).toBe('need')
+    f.source.questions.open(WORKER).forEach(row => f.source.store.delete('question', row.id))
+    f.source.store.all<Message>(`message:${WORKER}`).filter(message => message.question?.title === 'One more?').forEach(message => f.source.store.delete(`message:${WORKER}`, message.id))
+    expect(view()).toBe('todo')
+    // And so do the human's next words.
+    says('human', 'you', 'Actually, one more thing')
     expect(view()).toBe('need')
   } finally { f.close() }
 })
 
-test('a line that never lands stops holding the task off Needs you, and says nothing about a browser', async () => {
-  const f = fixture(), now = Date.now
+test('a coordinator saying which card it withdrew, by its question, is not asking one', async () => {
+  const f = fixture()
+  try {
+    f.source.core.current.connected = true
+    f.source.agents.terminal = (() => ({ state: 'live', address: 't', status: { state: 'idle' } })) as unknown as typeof f.source.agents.terminal
+    const id = f.ask('space', 'Which branch?')
+    await f.card('space', 'withdraw', id, '--why', 'Settled')
+    f.source.post('space', { id: 'said', who: 'agent', text: 'I withdrew the "Which branch?" card.', at: Date.now() + 1000 })
+    expect(f.source.snapshot().needs).toEqual([])
+    f.source.post('space', { id: 'asked', who: 'agent', text: 'Which branch next?', at: Date.now() + 2000 })
+    expect(f.source.snapshot().needs).toMatchObject([{ id: 'attention', chat: 'space' }])
+  } finally { f.close() }
+})
+
+test('a line that never lands leaves the task off Needs you, and says nothing about a browser', async () => {
+  const f = fixture()
   try {
     f.source.core.current.connected = true
     f.source.agents.terminal = (() => ({ state: 'live', address: 't', status: { state: 'idle' } })) as unknown as typeof f.source.agents.terminal
@@ -179,13 +215,11 @@ test('a line that never lands stops holding the task off Needs you, and says not
     f.source.logs.waiting = () => true
     const id = f.ask(WORKER)
     await f.card('space', 'withdraw', id, '--why', 'Settled')
-    Date.now = () => now() + 16_000
-    expect(f.source.tasks.view(f.source.tasks.get('EX-1')!).status).toBe('need')
-    Date.now = now
     await Bun.sleep(1)
+    expect(f.source.tasks.view(f.source.tasks.get('EX-1')!).status).toBe('todo')
     expect(f.source.store.get<{ state: string }>('pending-send', `card-withdrawn-${id}`)?.state).toBe('uncertain')
     expect(f.source.chat(WORKER)!.messages.some(message => message.text?.includes('Browser handoff'))).toBe(false)
-  } finally { Date.now = now; f.close() }
+  } finally { f.close() }
 })
 
 test('a withdrawn merge card merges nothing, and the task stays Ready until a fresh report asks again', async () => {

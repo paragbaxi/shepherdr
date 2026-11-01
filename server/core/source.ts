@@ -62,7 +62,6 @@ interface Machine { id: string; name: string; state: string; host?: string; vers
 interface Permission { id: string; chat: string; grant: string; question: Question; expires: number; settled?: boolean; allow?: boolean; at?: number; native?: NativeAsk; grants?: unknown[]; reply?: PermissionAnswer; tool?: string; hash?: string; turn?: string; sub?: string }
 /** the most of an agent's last words a card with no question carries: its card shows a few lines */
 const NEED_TEXT = 1000
-const WITHDRAWN_LINE_WAIT = 15_000
 interface PendingSend { id: string; chat: string; text: string; launch?: string; state: 'queued' | 'sending' | 'uncertain' | 'cancelled'; quiet?: boolean; work?: boolean; human?: boolean }
 
 /** Product state is Shepherdr's; terminals, machine commands, files and agent children are core's. */
@@ -107,8 +106,6 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
   private local: { id: string; name: string }
   private machines: Machine[] = []
   private permissions = new Map<string, (answer: PermissionAnswer) => void>()
-  private withdrawnLines = new Map<string, { id: string; until: number }>()
-  private withdrawnLineTimer?: ReturnType<typeof setTimeout>
   private ends = new NativeEnds()
   private faults = new Map<string, string>()
   private hooks = new Map<Action['type'], (action: Action) => Promise<unknown>>()
@@ -258,23 +255,11 @@ export class CoreSource extends Emitter<SourceEvents> implements Source {
     const terminal = this.agents.terminal(agent)
     if (terminal?.state === 'finished') return 'idle'
     if (agent.pid && terminal?.pid !== agent.pid) return 'need'
-    if (this.lineComing(agent.chat)) return 'work'
     const word = terminal?.status?.state ?? agent.state
     if (word === 'blocked') return 'need'
     const provider = this.providerRetries.get(agent)
     if (provider) return provider.over ? 'need' : 'work'
     return word === 'working' || word === 'starting' ? 'work' : 'idle'
-  }
-  /** A withdrawn card's line is on its way: until the agent takes it, for a moment at most, it isn't waiting on the human. */
-  private lineComing(chat: string) {
-    const coming = this.withdrawnLines.get(chat)
-    return !!coming && coming.until > Date.now() && ['queued', 'sending'].includes(this.store.get<PendingSend>('pending-send', coming.id)?.state ?? '')
-  }
-  sayWithdrawn(chat: string, id: string, text: string) {
-    this.saveAndDeliver(chat, id, text, () => this.withdrawnLines.set(chat, { id, until: Date.now() + WITHDRAWN_LINE_WAIT }), true)
-    // Nothing else may move once the wait is over, and what the agent then shows has to reach the screen.
-    clearTimeout(this.withdrawnLineTimer)
-    this.withdrawnLineTimer = setTimeout(() => this.emit('snapshot'), WITHDRAWN_LINE_WAIT + 100)
   }
   openPermissions(agent: CoreAgent) {
     return this.store.all<Permission>('permission').filter(item => item.chat === agent.chat && item.grant === agent.grant && !item.settled && item.expires > Date.now())
@@ -895,5 +880,5 @@ Use hc for starting, messaging and waiting on core child agents. Never use a web
   async upload(chat: string, name: string, data: Uint8Array) { return this.chats.upload(chat, name, data) }
   async attachment(chat: string, path: string) { return this.chats.attachment(chat, path) }
   async drain() { this.quiescing = true; this.screens.stop(); this.failedStarts.stop(); this.pluginUpdates?.stop(); await this.pluginUpdates?.drain(); this.plugins.stop(); this.voices.stop(); this.automations.stop(); this.github.stop(); this.health.stop(); this.limits.stop(); await this.github.drain(); await this.health.drain(); await this.limits.drain(); await this.automations.drain(); await this.pilots.usage.drain(); await this.pilots.lifecycle.drain(); await this.pilots.completion.drain(); return this.tasks.drain() }
-  stop() { clearInterval(this.recovery); clearTimeout(this.withdrawnLineTimer); this.screens.stop(); this.failedStarts.stop(); this.pluginUpdates?.stop(); this.plugins.stop(); this.voices.stop(); this.health.stop(); this.limits.stop(); this.automations.stop(); this.github.stop(); this.logs.stop(); this.browsers.stop(); this.core.stop() }
+  stop() { clearInterval(this.recovery); this.screens.stop(); this.failedStarts.stop(); this.pluginUpdates?.stop(); this.plugins.stop(); this.voices.stop(); this.health.stop(); this.limits.stop(); this.automations.stop(); this.github.stop(); this.logs.stop(); this.browsers.stop(); this.core.stop() }
 }

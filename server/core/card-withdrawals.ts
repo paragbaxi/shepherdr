@@ -67,8 +67,9 @@ export class CoreCardWithdrawals {
     // A CLI's own screen keeps its agent stuck whatever the card says, and the next look puts the card straight back.
     if (kind === 'Screen') throw new Refusal('This card is its CLI’s own screen: the agent stays stopped there until it is answered, so it cannot be withdrawn. Answer it in the Terminal, or stop or restart the agent.')
     if (kind === 'Merge') await this.source.tasks.withdrawMerge(id, closed)
+    this.source.tasks.noteWithdrawn(need.chat)
     const told = need.chat !== agent.chat && !!this.source.agents.get(need.chat)
-    if (told) this.source.sayWithdrawn(need.chat, `card-withdrawn-${id}`, `<shepherdr>${tag('card-withdrawn', { card: plain(title), by: 'coordinator' }, `${plain(reason).replace(/\.$/, '')}. ${ENDED[kind] ?? 'Nothing was answered or approved.'} Don't wait for it: carry on without it, and ask again only if you still need it.`)}</shepherdr>`)
+    if (told) this.source.saveAndDeliver(need.chat, `card-withdrawn-${id}`, `<shepherdr>${tag('card-withdrawn', { card: plain(title), by: 'coordinator' }, `${plain(reason).replace(/\.$/, '')}. ${ENDED[kind] ?? 'Nothing was answered or approved.'} Don't wait for it: carry on without it, and ask again only if you still need it.`)}</shepherdr>`, () => {}, true)
     if (kind === 'Secret') this.source.secrets.withdraw(id, closed)
     else if (kind !== 'Merge' && !this.source.withdrawPermission(id, closed)) this.source.questions.withdraw(id, closed)
     // The phone's alert shows the chat's newest card: a newer one still open keeps its alert.

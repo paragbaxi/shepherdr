@@ -107,8 +107,8 @@ chat, or says it no longer matters, withdraw it, so they never have to scroll ba
 - **Who.** Your own chat's cards only; a reviewer has none to withdraw. On Autopilot it is refused: the human taps.
 
 `<card-withdrawn card="…" by="coordinator">why</card-withdrawn>` says your coordinator withdrew one of your cards. Stop
-waiting for it: carry on without it, and ask again only if you still need it. A task with nothing it can do without it
-says so in one line, `shepherdr todo <id>`, then ends its turn: a turn that just ends still shows Needs you.
+waiting for it: carry on without it, and ask again only if you still need it. With nothing to do without it, say so in
+one line and end your turn: the task shows To do until the human next writes, unless your last words ask them something.
 
 ### Artifacts
 

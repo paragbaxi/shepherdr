@@ -3,6 +3,8 @@
 Use secrets by name. The human adds, replaces and removes values in Settings → Secrets, at Everywhere,
 machine or space scope; the most specific scope wins. An agent requests a masked input card with
 `shepherdr secret ask NAME --why "purpose"`, then ends its turn. Values never belong in chat or artifacts.
+A request that no longer matters can be withdrawn (`shepherdr card withdraw`): nothing is saved, and a late save from
+its masked box is refused.
 
 `secret run NAME -- COMMAND` obtains the requested names through the current launch’s authenticated core
 mailbox and adds values only to the child environment. Its output masks exact values, including values split

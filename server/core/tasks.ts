@@ -56,6 +56,7 @@ export interface CoreTask extends Task {
   reviewTurn?: string
   reviewFailure?: string
   mergeQuestion?: string
+  cardWithdrawnAt?: number
   startError?: string
   includesPending?: boolean
   providerTakeover?: { from: AgentKind; to: AgentKind; why: string; at: number; launch: string; state: 'starting' | 'queued' | 'started' | 'failed'; handover?: string }
@@ -88,6 +89,7 @@ export interface CoreTask extends Task {
 }
 
 const REVIEW_LINE = 'Waiting for review'
+const WITHDRAWN_TURN = 5 * 60000 // Long enough to say it has stopped; work that goes on ends as any other turn does.
 const REVIEW_QUIET = 20 * 60000 // As long as a task may stay quiet before its stalled news.
 const REVIEW_RELAY = 2 * 60000 // A finished reviewer's report reaches the agent within a few polls.
 
@@ -131,8 +133,9 @@ export class CoreTasks {
     const waiting = agent && nativeStatus === 'idle' && this.source.logs?.waiting?.(agent)
     const provider = task.workflow === 'working' && agent && this.source.providerRetries?.get(agent)
     const review = waiting && !provider && this.reviewRunning(task) && !this.lastWordsAsk(task.chat)
+    const settled = waiting && !provider && !review && terminal?.state !== 'finished' && this.settledByWithdrawal(task, agent?.activityAt)
     const status = task.startError ? 'need' : task.workflow === 'merged' || task.workflow === 'closed' ? 'done' : task.workflow === 'ready' ? 'ready' : task.workflow === 'merging' ? 'merging'
-      : task.workflow === 'queued' ? 'queued' : task.workflow === 'todo' || !agent ? 'todo' : nativeStatus === 'need' || waiting && !provider && !review || terminal?.state === 'finished' ? 'need' : 'work'
+      : task.workflow === 'queued' ? 'queued' : task.workflow === 'todo' || !agent || settled ? 'todo' : nativeStatus === 'need' || waiting && !provider && !review || terminal?.state === 'finished' ? 'need' : 'work'
     const retryLine = provider ? `${provider.reason}${provider.due ? ` · retry in ${Math.max(1, Math.ceil((provider.due - Date.now()) / 60000))}m` : provider.over ? '' : ' · retrying'}` : undefined
     const created = Date.parse(task.created)
     const observed = this.source.store.get<{ status: string; at?: number }>('automation-seen', task.id)
@@ -144,11 +147,21 @@ export class CoreTasks {
     return { ...task, ...(reviewLine ? { waitsFor: 'review' as const, report: task.report && { ...task.report, msg: reviewLine } } : {}), age: taskAge, on: CLI_NAME[agent?.kind ?? task.kind], status, sub: task.capacity ? `Waiting: ${task.capacity}` : retryLine || reviewLine || task.sub, browser: agent?.browser ? { ready: this.source.machineConnected?.(task.machine) ?? true, hint: this.source.machineConnected?.(task.machine) === false ? 'This machine is reconnecting' : undefined } : { ready: false, hint: 'Start or restart the task agent to provision its shared browser' }, agent: agent ? { chat: task.chat, role: 'Agent', cli: CLI_NAME[agent.kind], status: nativeStatus === 'off' ? 'off' : status, running: !!terminal && terminal.state !== 'finished', age: agentAge, note: retryLine || reviewLine || task.report?.msg || '' } : undefined,
       state: status === 'done' ? task.workflow === 'closed' ? 'Done' : 'Merged' : status === 'ready' ? 'Ready' : status === 'need' ? 'Needs you' : status === 'queued' ? 'Queued' : status === 'todo' ? 'To do' : status === 'merging' ? 'Merging' : 'Working' }
   }
-  /** A question put in plain words still needs the human, whatever else the agent waits for. */
-  lastWordsAsk(chat: string) {
-    const last = this.source.logs.messages(chat).findLast(message => message.text)
-    return last?.who === 'agent' && /\?(?=[\s*_`"')\]]|$)/.test(last.text!)
+  /** Its card is gone and it has nothing to ask back: it isn't waiting on the human, until a new card or their next words. */
+  private settledByWithdrawal(task: CoreTask, activity = 0) {
+    const at = task.cardWithdrawnAt
+    if (!at || activity > at + WITHDRAWN_TURN) return false
+    const since = this.source.logs.messages(task.chat).filter(message => (message.at ?? 0) > at)
+    return !since.some(message => message.who === 'you' || message.question) && !this.asks(since.findLast(message => message.text))
   }
+  noteWithdrawn(chat: string) {
+    const task = this.forChat(chat)
+    if (task?.chat === chat) { task.cardWithdrawnAt = Date.now(); this.save(task) }
+  }
+  /** A question put in plain words still needs the human, whatever else the agent waits for. */
+  lastWordsAsk(chat: string) { return this.asks(this.source.logs.messages(chat).findLast(message => message.text)) }
+  /** A question quoted back ('The "Rerun CI?" card is gone') isn't one being asked. */
+  private asks(message?: Message) { return message?.who === 'agent' && /\?(?=[\s*_`"')\]]|$)/.test(message.text!.replace(/"[^"\n]*"|“[^”\n]*”|`[^`\n]*`/g, '')) }
   /** Its recorded reviewer is at work, or its report is on the way. A reviewer that asks, dies, stalls or ends without a report reaching the agent is no wait. */
   private reviewRunning(task: CoreTask, now = Date.now()) {
     const reviewer = task.workflow === 'working' && task.reviewChat ? this.source.agents.get(task.reviewChat) : undefined
